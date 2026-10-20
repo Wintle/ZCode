@@ -1,6 +1,9 @@
 import {
   isPublicZCodeErrorCode,
+  REMOTE_AUTH_REQUIRED_ERROR_CODE,
   REMOTE_BIND_CANCELED_ERROR_CODE,
+  REMOTE_DEVICE_REVOKED_ERROR_CODE,
+  REMOTE_PAIRING_CODE_INVALID_ERROR_CODE,
   REMOTE_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE,
   REMOTE_WORKSPACE_BIND_SESSION_MISSING_ERROR_CODE,
   REMOTE_WORKSPACE_DIRECTORY_UNAVAILABLE_ERROR_CODE,
@@ -45,6 +48,9 @@ const messageIdByCode: Record<PublicZCodeErrorCode, string> = {
   "remote-permission-denied": "remote.error.permissionDenied",
   "remote-connection-canceled": "remote.error.connectionCanceled",
   "remote-connection-unknown": "remote.error.unknown",
+  [REMOTE_PAIRING_CODE_INVALID_ERROR_CODE]: "remote.error.pairingCodeInvalid",
+  [REMOTE_DEVICE_REVOKED_ERROR_CODE]: "remote.error.deviceRevoked",
+  [REMOTE_AUTH_REQUIRED_ERROR_CODE]: "remote.error.authRequired",
 
   [SOURCE_SERVER_INSTALL_REQUIRED_ERROR_CODE]: "remote.error.sourceServerInstallRequired",
   [SOURCE_SERVER_IDENTITY_CHANGE_PENDING_ERROR_CODE]:
@@ -113,6 +119,20 @@ export function classifyRemoteConnectionError(input: {
     case "remote-connection-canceled":
       category = "canceled";
       primaryAction = "connect";
+      break;
+    // 直连配对三类失败按规格分类：配对码错误在配对阶段内联改码重试；
+    // 吊销与需鉴权是「需要处理 · 重新配对」，不参与自动重试。
+    case REMOTE_PAIRING_CODE_INVALID_ERROR_CODE:
+      category = "pairing-code-invalid";
+      primaryAction = "pairing-retry";
+      break;
+    case REMOTE_DEVICE_REVOKED_ERROR_CODE:
+      category = "device-revoked";
+      primaryAction = "re-pair";
+      break;
+    case REMOTE_AUTH_REQUIRED_ERROR_CODE:
+      category = "auth-required";
+      primaryAction = "re-pair";
       break;
     case "credentials-required":
       category = "credentials";

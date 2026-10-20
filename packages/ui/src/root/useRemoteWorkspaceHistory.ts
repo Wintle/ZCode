@@ -1269,7 +1269,11 @@ export function useRemoteWorkspaceHistory({
         toast(
           intl.formatMessage(
             { id: "remote.reusedConnection" },
-            { connection: formatRemoteConnectionDescription(result.reusedConnectionTarget) },
+            {
+              connection: formatRemoteConnectionDescription(result.reusedConnectionTarget, (kind) =>
+                intl.formatMessage({ id: `remote.kind.${kind}` }),
+              ),
+            },
           ),
           { variant: "info", durationMs: 8000 },
         );

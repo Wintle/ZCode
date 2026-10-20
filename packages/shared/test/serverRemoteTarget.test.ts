@@ -3,6 +3,7 @@ import {
   buildServerRemoteWorkspaceIdentity,
   parseRemoteWorkspaceIdentity,
 } from "../src/remote-workspace-identity.js";
+import { stripRemoteTargetSecrets } from "../src/remoteTarget.js";
 import { hostIncomingMessageSchema, remoteTargetSchema } from "../src/validation.js";
 
 describe("server remote target", () => {
@@ -55,6 +56,24 @@ describe("server remote target", () => {
       sourceServerId: "studio-server-01",
       workspacePath: "/Users/dev/ZCodeProject",
     });
+  });
+
+  it("接受连接流程内存态的配对码，且与 token 一同被脱敏剥除", () => {
+    const parsed = remoteTargetSchema.safeParse({
+      kind: "server",
+      url: "http://192.168.1.5:8737",
+      pairingCode: "AbCd-1234",
+    });
+    expect(parsed.success).toBe(true);
+    // 配对码与 token 一样只活在连接流程里；任何持久化/跨进程回包都必须先剥除。
+    expect(
+      stripRemoteTargetSecrets({
+        kind: "server",
+        url: "http://192.168.1.5:8737",
+        pairingCode: "AbCd-1234",
+        token: "device-token",
+      }),
+    ).toEqual({ kind: "server", url: "http://192.168.1.5:8737" });
   });
 
   it("rejects malformed server targets and identities", () => {

@@ -1,5 +1,5 @@
-import { Box, Server, TerminalSquare } from "lucide-react";
-import type { SourceServerTransportKind } from "@zcode/shared";
+import { Box, Network, Server, TerminalSquare } from "lucide-react";
+import type { RemoteTarget } from "@zcode/shared";
 import { cn } from "@/components/lib/utils.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import {
@@ -10,6 +10,9 @@ import {
 export { formatConnectionProfileTarget } from "@/lib/remoteConnectionPresentation.js";
 
 export type RemoteConnectionDisplayStatus = RemoteConnectionStatus;
+
+/** UI 层的连接类型全集；持久化枚举（SourceServerTransportKind）不因直连扩展。 */
+export type RemoteConnectionKind = RemoteTarget["kind"];
 
 /**
  * 连接类型的唯一配色来源。类型 token 只表达连接类型（DESIGN.md），
@@ -37,10 +40,18 @@ export const REMOTE_KIND_PRESENTATION = {
       "bg-remote-docker-surface text-remote-docker-foreground ring-1 ring-inset ring-remote-docker-border",
     tileClassName: "bg-remote-docker-surface text-remote-docker-foreground",
   },
-} as const;
+  // 直连图标用 Network：CloudIcon 与五态状态云语义冲突（直连规格）。
+  server: {
+    Icon: Network,
+    className: "border-remote-server-border bg-remote-server-surface text-remote-server-foreground",
+    selectedClassName:
+      "bg-remote-server-surface text-remote-server-foreground ring-1 ring-inset ring-remote-server-border",
+    tileClassName: "bg-remote-server-surface text-remote-server-foreground",
+  },
+} as const satisfies Record<RemoteConnectionKind, object>;
 
 /** 候选列表行左侧的类型图标块。 */
-export function RemoteConnectionKindTile({ kind }: { kind: SourceServerTransportKind }) {
+export function RemoteConnectionKindTile({ kind }: { kind: RemoteConnectionKind }) {
   const { Icon, tileClassName } = REMOTE_KIND_PRESENTATION[kind];
   return (
     <span
@@ -59,7 +70,7 @@ export function RemoteConnectionKindTag({
   kind,
   className,
 }: {
-  kind: SourceServerTransportKind;
+  kind: RemoteConnectionKind;
   className?: string;
 }) {
   const { intl } = useZCodeIntl();

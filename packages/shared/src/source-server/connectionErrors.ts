@@ -1,5 +1,11 @@
 import { sanitizeRemoteConnectionLog } from "./connectionLog.js";
-import { isPublicZCodeErrorCode, type PublicZCodeErrorCode } from "./errorCodes.js";
+import {
+  isPublicZCodeErrorCode,
+  REMOTE_AUTH_REQUIRED_ERROR_CODE,
+  REMOTE_DEVICE_REVOKED_ERROR_CODE,
+  REMOTE_PAIRING_CODE_INVALID_ERROR_CODE,
+  type PublicZCodeErrorCode,
+} from "./errorCodes.js";
 
 export interface RemoteConnectionFailure {
   code: PublicZCodeErrorCode;
@@ -116,4 +122,62 @@ export function normalizeRemoteConnectionError(
   }
   // 未识别的内层 cause 不是阶段失败事实，不能提前覆盖外层已确认的认证等领域码。
   return visit(error, true);
+}
+
+/** 取非空字符串正文；配对/401 响应的 message 必须保证非空，UI 才有稳定兜底。 */
+function nonEmptyBodyMessage(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * 局域网直连受保护端点 401 响应体分类（wire code → 公开错误码）。
+ * undefined 表示该 401 没有稳定分类，调用方必须维持既有 HTTP 失败语义，不得猜测归因。
+ */
+export function classifyRemoteUnauthorizedFailure(
+  bodyCode: unknown,
+  bodyMessage?: unknown,
+): RemoteConnectionFailure | undefined {
+  const message = nonEmptyBodyMessage(bodyMessage);
+  if (bodyCode === "device-revoked") {
+    return {
+      code: REMOTE_DEVICE_REVOKED_ERROR_CODE,
+      message: message ?? "Remote device credential was revoked",
+      retryable: false,
+    };
+  }
+  if (bodyCode === "auth-required") {
+    return {
+      code: REMOTE_AUTH_REQUIRED_ERROR_CODE,
+      message: message ?? "Remote authentication is required",
+      retryable: false,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * POST /api/pair 失败分类。wire 侧四种失败码（invalid / expired / rate-limited / disabled）
+ * 规格只为控制端定义同一个公开码：配对阶段内联提示、可改码重试，具体原因由消息承载。
+ */
+export function classifyRemotePairingFailure(
+  bodyCode: unknown,
+  bodyMessage?: unknown,
+): RemoteConnectionFailure {
+  const wireCode = nonEmptyBodyMessage(bodyCode);
+  const message =
+    nonEmptyBodyMessage(bodyMessage) ?? (wireCode ? `Pairing rejected (${wireCode})` : undefined);
+  return {
+    code: REMOTE_PAIRING_CODE_INVALID_ERROR_CODE,
+    message: message ?? "Pairing request failed",
+    retryable: false,
+  };
+}
+
+/**
+ * 握手 401 已分类为「需要重新配对」的两类失败。仅当调用方仍持有未消费的配对码时
+ * 驱动一次配对交换；无码场景必须原样上抛，禁止回退成网络错误重试。
+ */
+export function isRemotePairingRequiredFailure(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return code === REMOTE_DEVICE_REVOKED_ERROR_CODE || code === REMOTE_AUTH_REQUIRED_ERROR_CODE;
 }

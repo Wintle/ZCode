@@ -27,11 +27,15 @@ export interface RemoteConnectionFormSnapshot {
   wslUser?: string;
   dockerContainer: string;
   manualDockerContainer?: string;
-  serverUrl?: string;
+  serverHost?: string;
+  serverPort?: string;
+  serverPairingCode?: string;
   serverName?: string;
-  serverToken?: string;
   serverWorkspacePath?: string;
 }
+
+/** 直连目标的默认端口，与被控端 `zcode serve` 的非回环监听约定一致。 */
+export const DEFAULT_SERVER_REMOTE_PORT = "8737";
 
 export function getRemoteWizardStepCopy(
   intl: WizardIntlLike,
@@ -131,7 +135,7 @@ export type RemoteFormField =
   | "privateKey"
   | "docker"
   | "wslUser"
-  | "serverUrl";
+  | "serverPairingCode";
 
 export interface RemoteFormFieldError {
   field: RemoteFormField;
@@ -184,15 +188,11 @@ export function collectRemoteFormFieldErrors(
       break;
     }
     case "server": {
-      const url = snapshot.serverUrl?.trim() ?? "";
-      if (!url) {
-        add("serverUrl", "server.validation.urlRequired");
-      } else {
-        try {
-          new URL(url);
-        } catch {
-          add("serverUrl", "server.validation.invalidUrl");
-        }
+      // 直连表单只收主机、端口与配对码；URL 由构建阶段合成，凭据只经配对产生。
+      if (!snapshot.serverHost?.trim()) add("host", "server.validation.hostRequired");
+      if (isInvalidPort(snapshot.serverPort?.trim() ?? "")) add("port", "server.validation.port");
+      if (!snapshot.serverPairingCode?.trim()) {
+        add("serverPairingCode", "server.validation.pairingCodeRequired");
       }
       break;
     }
@@ -212,8 +212,11 @@ export function formatRemoteDraftPreview(snapshot: RemoteConnectionFormSnapshot)
       return snapshot.manualDockerContainer?.trim() || snapshot.dockerContainer.trim() || null;
     case "wsl":
       return snapshot.wslDistro.trim() || null;
-    case "server":
-      return snapshot.serverUrl?.trim() || null;
+    case "server": {
+      const host = snapshot.serverHost?.trim();
+      if (!host) return null;
+      return `${host}:${snapshot.serverPort?.trim() || DEFAULT_SERVER_REMOTE_PORT}`;
+    }
   }
 }
 
@@ -274,21 +277,41 @@ export function buildRemoteTarget(
       };
     }
     case "server": {
-      const url = snapshot.serverUrl?.trim() ?? "";
+      // URL 只由主机与端口合成（默认 http；被控端为局域网明文 ws，跨网 TLS 由反向代理承担），
+      // 用户不再手填完整 URL，host 字段只承载纯主机或 IP。
+      const host = snapshot.serverHost?.trim() ?? "";
+      const port = snapshot.serverPort?.trim() || DEFAULT_SERVER_REMOTE_PORT;
+      const urlHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
       const name = snapshot.serverName?.trim();
-      const token = snapshot.serverToken?.trim();
+      const pairingCode = snapshot.serverPairingCode?.trim();
       const workspacePath = snapshot.serverWorkspacePath?.trim();
 
       return {
         target: {
           kind: "server",
-          url,
+          url: `http://${urlHost}:${port}`,
           ...(name ? { name } : {}),
-          ...(token ? { token } : {}),
+          ...(pairingCode ? { pairingCode } : {}),
           ...(workspacePath ? { workspacePath } : {}),
         },
       };
     }
+  }
+}
+
+/**
+ * 从已保存/回传的 server URL 还原表单的主机与端口。
+ * 解析失败时整串当作主机回填，让用户在表单里修正而不是丢失目标。
+ */
+export function parseServerRemoteAddress(url: string): { host: string; port: string } {
+  try {
+    const parsed = new URL(url.trim());
+    return {
+      host: parsed.hostname,
+      port: parsed.port || DEFAULT_SERVER_REMOTE_PORT,
+    };
+  } catch {
+    return { host: url.trim(), port: DEFAULT_SERVER_REMOTE_PORT };
   }
 }
 

@@ -4,8 +4,11 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { projectStorage } from "#src/project-storage/index.js";
-import { createRemoteProjectService } from "#src/remote-projects/index.js";
-import type { RemoteProjectCache } from "#src/remote-projects/contract.js";
+import {
+  createRemoteProjectService,
+  prepareRemoteServerConnection,
+} from "#src/remote-projects/index.js";
+import type { RemoteProjectCache, RemoteProjectHost } from "#src/remote-projects/contract.js";
 const databases: DatabaseSync[] = [];
 const directories: string[] = [];
 afterEach(async () => {
@@ -66,7 +69,6 @@ it("URL 首次握手固化稳定身份，下一次身份变化不能迁移入口
 
 it("URL admission 复用凭据服务，保留连接不重建成员，迟到握手不能复活入口", async () => {
   const { service } = await fixture();
-  const { prepareRemoteServerConnection } = await import("#src/remote-projects/index.js");
   const secrets = new Map<string, string>();
   const credentials = {
     load: vi.fn(async (key: string) => secrets.get(key) ?? null),
@@ -103,4 +105,76 @@ it("URL admission 复用凭据服务，保留连接不重建成员，迟到握�
     }),
   ).rejects.toThrow("remote-project.host-removed");
   expect((await service.readDirectory()).hosts.some((host) => host.kind === "server")).toBe(false);
+});
+
+const savedServerTarget = (host: RemoteProjectHost | undefined) =>
+  host && host.target?.kind === "server" ? host.target : undefined;
+
+it("配对回传的设备 Token 沿手工输入路径落凭据，配对码与 Token 不进快照", async () => {
+  const { service } = await fixture();
+  const secrets = new Map<string, string>();
+  const credentials = {
+    load: vi.fn(async (key: string) => secrets.get(key) ?? null),
+    save: vi.fn(async (key: string, value: string) => {
+      secrets.set(key, value);
+    }),
+  };
+  const admission = await prepareRemoteServerConnection({
+    service,
+    credentials,
+    target: { kind: "server", url: "https://example.test", pairingCode: "AbCd-1234" },
+    intent: "add",
+  });
+  // 连接目标保留配对码供本次握手消费；持久化快照在 saveHost 前就已剥除配对码。
+  expect(admission.target.pairingCode).toBe("AbCd-1234");
+  expect(credentials.save).not.toHaveBeenCalled();
+  const before = (await service.readDirectory()).hosts.find((host) => host.kind === "server");
+  expect(JSON.stringify(before)).not.toContain("AbCd-1234");
+  expect(savedServerTarget(before)?.tokenCredentialKey).toBeUndefined();
+
+  await admission.persistDeviceToken("device-token");
+  const key = `remote-server:${before!.id}:token`;
+  expect(credentials.save).toHaveBeenCalledWith(key, "device-token");
+  const after = (await service.readDirectory()).hosts.find((host) => host.kind === "server");
+  expect(savedServerTarget(after)?.tokenCredentialKey).toBe(key);
+  expect(JSON.stringify(after)).not.toContain("device-token");
+  expect(JSON.stringify(after)).not.toContain("pairingCode");
+
+  const retained = await prepareRemoteServerConnection({
+    service,
+    credentials,
+    target: { kind: "server", url: "https://example.test" },
+    intent: "retain",
+  });
+  expect(retained.target.token).toBe("device-token");
+});
+
+it("commit 只在快照缺名时补 server-info 默认设备名，不覆盖用户命名", async () => {
+  const credentials = {
+    load: vi.fn(async () => null),
+    save: vi.fn(async () => undefined),
+  };
+  const unnamed = await fixture();
+  const admission = await prepareRemoteServerConnection({
+    service: unnamed.service,
+    credentials,
+    target: { kind: "server", url: "https://example.test" },
+    intent: "add",
+  });
+  await admission.commit("stable", { name: "lan-host-01" });
+  const filled = (await unnamed.service.readDirectory()).hosts.find(
+    (host) => host.kind === "server",
+  );
+  expect(savedServerTarget(filled)).toMatchObject({ serverId: "stable", name: "lan-host-01" });
+
+  const named = await fixture();
+  const namedAdmission = await prepareRemoteServerConnection({
+    service: named.service,
+    credentials,
+    target: { kind: "server", url: "https://named.example.test", name: "Studio" },
+    intent: "add",
+  });
+  await namedAdmission.commit("named-stable", { name: "hostname-fallback" });
+  const kept = (await named.service.readDirectory()).hosts.find((host) => host.kind === "server");
+  expect(savedServerTarget(kept)).toMatchObject({ serverId: "named-stable", name: "Studio" });
 });

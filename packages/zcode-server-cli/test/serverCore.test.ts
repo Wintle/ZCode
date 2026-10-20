@@ -7,6 +7,7 @@ const materializeZCodeBuiltinProviderConfig = vi.fn();
 const disposeServiceResourcesAndWait = vi.fn();
 const createCoreHttpServer = vi.fn();
 const createIngressToken = vi.fn();
+const createDeviceTokenStore = vi.fn();
 const resolveCoreServerId = vi.fn();
 const installParentDisconnectHandler = vi.fn();
 const createTaskActivityTracker = vi.fn();
@@ -21,7 +22,10 @@ vi.mock("@zcode/services/node", () => ({
   materializeZCodeBuiltinProviderConfig,
 }));
 vi.mock("../src/server-core/http.js", () => ({ createCoreHttpServer }));
-vi.mock("../src/server-core/ingressToken.js", () => ({ createIngressToken }));
+vi.mock("../src/server-core/ingressToken.js", () => ({
+  createIngressToken,
+  createDeviceTokenStore,
+}));
 vi.mock("../src/server-core/serverIdentity.js", () => ({ resolveCoreServerId }));
 vi.mock("../src/server-core/parentDisconnect.js", () => ({ installParentDisconnectHandler }));
 vi.mock("../src/server-core/taskActivityTracker.js", () => ({ createTaskActivityTracker }));
@@ -33,6 +37,8 @@ const ENV_KEYS = [
   "ZCODE_SERVER_RUNTIME_ROOT",
   "ZCODE_SERVER_RELEASE_ID",
   "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+  "ZCODE_SERVER_LISTEN_HOST",
+  "ZCODE_SERVER_LISTEN_PORT",
 ] as const;
 const PROCESS_EVENTS = ["message", "SIGTERM", "SIGINT"] as const;
 // 以通用 EventEmitter 视角操作 process，绕开 process.on/listeners 针对具体事件名的重载。
@@ -73,6 +79,12 @@ describe("runServerCore startup wiring", () => {
       close: vi.fn(async () => undefined),
     });
     createIngressToken.mockResolvedValue("ingress-token");
+    // core.ts 在 provider config 检查之前打开设备存储；mock 只需提供 ready/shutdown 用到的面。
+    createDeviceTokenStore.mockResolvedValue({
+      serverId: null,
+      activeCount: () => 0,
+      flush: async () => undefined,
+    });
     resolveCoreServerId.mockResolvedValue("server-installation-id");
     installParentDisconnectHandler.mockReturnValue(() => undefined);
     createTaskActivityTracker.mockReturnValue({
@@ -169,6 +181,25 @@ describe("runServerCore startup wiring", () => {
         providerProvisioningTargetEnabled: true,
       }),
     );
+  });
+
+  it("passes the env-forwarded listen target into the HTTP server", async () => {
+    process.env.ZCODE_SERVER_LISTEN_HOST = "192.168.1.5";
+    process.env.ZCODE_SERVER_LISTEN_PORT = "8737";
+
+    await runServerCore(1);
+
+    expect(createCoreHttpServer).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ host: "192.168.1.5", port: 8737 }),
+    );
+  });
+
+  it("fails fast when env forwards a non-loopback host without a port", async () => {
+    process.env.ZCODE_SERVER_LISTEN_HOST = "0.0.0.0";
+
+    await expect(runServerCore(1)).rejects.toThrow(/explicit --port/u);
+    expect(createServerHostServices).not.toHaveBeenCalled();
   });
 
   it("fails fast when neither an embedded nor an explicit built-in config is available", async () => {

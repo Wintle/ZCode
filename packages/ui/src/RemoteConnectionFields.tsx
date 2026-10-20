@@ -63,6 +63,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import {
+  DEFAULT_SERVER_REMOTE_PORT,
   parseSshPasteTarget,
   type RemoteFormField,
   type RemoteFormFieldError,
@@ -352,9 +353,10 @@ export function RemoteConnectionFields({
   wslDistros,
   dockerContainer,
   manualDockerContainer,
-  serverUrl,
+  serverHost,
+  serverPort,
   serverName,
-  serverToken,
+  serverPairingCode,
   serverWorkspacePath,
   dockerContainers,
   dockerAvailable,
@@ -379,9 +381,10 @@ export function RemoteConnectionFields({
   setWslUser,
   setDockerContainer,
   setManualDockerContainer,
-  setServerUrl,
+  setServerHost,
+  setServerPort,
   setServerName,
-  setServerToken,
+  setServerPairingCode,
   setServerWorkspacePath,
 }: {
   focusCredentials?: boolean;
@@ -414,9 +417,10 @@ export function RemoteConnectionFields({
   wslDistros: WSLDistro[];
   dockerContainer: string;
   manualDockerContainer: string;
-  serverUrl: string;
+  serverHost: string;
+  serverPort: string;
   serverName: string;
-  serverToken: string;
+  serverPairingCode: string;
   serverWorkspacePath: string;
   dockerContainers: DockerContainerInfo[];
   dockerAvailable: boolean | null;
@@ -441,9 +445,10 @@ export function RemoteConnectionFields({
   setWslUser?: (value: string) => void;
   setDockerContainer: (value: string) => void;
   setManualDockerContainer: (value: string) => void;
-  setServerUrl: (value: string) => void;
+  setServerHost: (value: string) => void;
+  setServerPort: (value: string) => void;
   setServerName: (value: string) => void;
-  setServerToken: (value: string) => void;
+  setServerPairingCode: (value: string) => void;
   setServerWorkspacePath: (value: string) => void;
 }) {
   const { intl } = useZCodeIntl();
@@ -861,80 +866,90 @@ export function RemoteConnectionFields({
       );
     case "server":
       return (
-        <div className="space-y-3">
-          <p className="text-pretty text-ui-base text-remote-foreground-muted">
-            {intl.formatMessage({ id: "server.description" })}
-          </p>
+        <div className="space-y-4">
+          {/* 主机与端口同属直连目标，放在同一行；端口固定 6rem，默认 8737（RDUX-27）。 */}
           <div>
-            <label
-              htmlFor={`${fieldId}-server.url`}
-              className="mb-1.5 block text-ui-sm text-remote-foreground-muted"
-            >
-              {intl.formatMessage({ id: "server.url" })}
-            </label>
+            <div className="grid grid-cols-[minmax(0,1fr)_6rem] gap-3">
+              <div className="min-w-0">
+                <FieldLabel htmlFor={`${fieldId}-server.host`}>
+                  {intl.formatMessage({ id: "server.host" })}
+                </FieldLabel>
+                <Input
+                  size="lg"
+                  className="h-9 font-mono placeholder:font-sans text-ui-base"
+                  value={serverHost}
+                  onChange={(event) => setServerHost(event.target.value)}
+                  placeholder={intl.formatMessage({ id: "server.hostPlaceholder" })}
+                  autoFocus={autoFocusHost}
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  id={`${fieldId}-server.host`}
+                  {...invalidProps("host")}
+                  data-testid={TID_SERVER_URL_INPUT}
+                />
+              </div>
+              <div>
+                <FieldLabel htmlFor={`${fieldId}-server.port`}>
+                  {intl.formatMessage({ id: "server.port" })}
+                </FieldLabel>
+                <Input
+                  size="lg"
+                  className="h-9 font-mono placeholder:font-sans text-ui-base"
+                  value={serverPort}
+                  onChange={(event) => setServerPort(event.target.value)}
+                  placeholder={DEFAULT_SERVER_REMOTE_PORT}
+                  inputMode="numeric"
+                  id={`${fieldId}-server.port`}
+                  {...invalidProps("port")}
+                  data-testid="server-port-input"
+                />
+              </div>
+            </div>
+            <FieldError id={errorId("host")} message={errorOf("host")} />
+            {/* 端口错误文案较长，放在整行下方，避免挤进 6rem 列。 */}
+            <FieldError id={errorId("port")} message={errorOf("port")} />
+          </div>
+          <div>
+            <FieldLabel htmlFor={`${fieldId}-server.pairingCode`}>
+              {intl.formatMessage({ id: "server.pairingCode" })}
+            </FieldLabel>
+            <Input
+              size="lg"
+              className="h-9 font-mono placeholder:font-sans text-ui-base"
+              value={serverPairingCode}
+              onChange={(event) => setServerPairingCode(event.target.value)}
+              placeholder={intl.formatMessage({ id: "server.pairingCodePlaceholder" })}
+              autoFocus={focusCredentials}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              id={`${fieldId}-server.pairingCode`}
+              {...invalidProps("serverPairingCode", focusCredentials)}
+              data-testid={TID_SERVER_TOKEN_INPUT}
+            />
+            <FieldError id={errorId("serverPairingCode")} message={errorOf("serverPairingCode")} />
+            <FieldHint>{intl.formatMessage({ id: "server.pairingCodeDescription" })}</FieldHint>
+          </div>
+          <div>
+            <FieldLabel htmlFor={`${fieldId}-server.name`}>
+              {intl.formatMessage({ id: "server.name" })}
+            </FieldLabel>
             <Input
               size="lg"
               className="h-9 text-ui-base"
-              value={serverUrl}
-              onChange={(event) => setServerUrl(event.target.value)}
-              placeholder={intl.formatMessage({ id: "server.urlPlaceholder" })}
-              autoCapitalize="none"
-              spellCheck={false}
-              id={`${fieldId}-server.url`}
-              {...invalidProps("serverUrl")}
-              data-testid={TID_SERVER_URL_INPUT}
+              value={serverName}
+              onChange={(event) => setServerName(event.target.value)}
+              placeholder={intl.formatMessage({
+                id: "server.namePlaceholder",
+              })}
+              id={`${fieldId}-server.name`}
+              data-testid={TID_SERVER_NAME_INPUT}
             />
-            <FieldError id={errorId("serverUrl")} message={errorOf("serverUrl")} />
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label
-                htmlFor={`${fieldId}-server.name`}
-                className="mb-1.5 block text-ui-sm text-remote-foreground-muted"
-              >
-                {intl.formatMessage({ id: "server.name" })}
-              </label>
-              <Input
-                size="lg"
-                className="h-9 text-ui-base"
-                value={serverName}
-                onChange={(event) => setServerName(event.target.value)}
-                placeholder={intl.formatMessage({
-                  id: "server.namePlaceholder",
-                })}
-                id={`${fieldId}-server.name`}
-                data-testid={TID_SERVER_NAME_INPUT}
-              />
-            </div>
-            <div>
-              <label
-                htmlFor={`${fieldId}-server.token`}
-                className="mb-1.5 block text-ui-sm text-remote-foreground-muted"
-              >
-                {intl.formatMessage({ id: "server.token" })}
-              </label>
-              <RemotePasswordInput
-                size="lg"
-                className="h-9 text-ui-base"
-                autoFocus={focusCredentials}
-                value={serverToken}
-                onChange={(event) => setServerToken(event.target.value)}
-                placeholder={intl.formatMessage({
-                  id: "server.tokenPlaceholder",
-                })}
-                autoComplete="off"
-                id={`${fieldId}-server.token`}
-                data-testid={TID_SERVER_TOKEN_INPUT}
-              />
-            </div>
           </div>
           <div>
-            <label
-              htmlFor={`${fieldId}-server.workspacePath`}
-              className="mb-1.5 block text-ui-sm text-remote-foreground-muted"
-            >
+            <FieldLabel htmlFor={`${fieldId}-server.workspacePath`}>
               {intl.formatMessage({ id: "server.workspacePath" })}
-            </label>
+            </FieldLabel>
             <Input
               size="lg"
               className="h-9 text-ui-base"
@@ -948,9 +963,7 @@ export function RemoteConnectionFields({
               id={`${fieldId}-server.workspacePath`}
               data-testid={TID_SERVER_WORKSPACE_PATH_INPUT}
             />
-            <p className="mt-1 text-pretty text-ui-base text-remote-foreground-muted">
-              {intl.formatMessage({ id: "server.workspacePathDescription" })}
-            </p>
+            <FieldHint>{intl.formatMessage({ id: "server.workspacePathDescription" })}</FieldHint>
           </div>
         </div>
       );

@@ -45,7 +45,7 @@ export function RemoteConnectionMinimizedProgress({
   ready,
 }: RemoteConnectionProgress) {
   const { intl } = useZCodeIntl();
-  const phases = resolveRemoteConnectionPhases(logs);
+  const phases = resolveRemoteConnectionPhases(logs, { kind: target?.kind });
   const active =
     phases.find((phase) => phase.status === "active" || phase.status === "failed") ?? phases[0]!;
   const percent = Math.round(

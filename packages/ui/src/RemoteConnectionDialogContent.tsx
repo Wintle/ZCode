@@ -153,9 +153,10 @@ export function RemoteConnectionSettingsStep({
   wslDistros,
   dockerContainer,
   manualDockerContainer,
-  serverUrl,
+  serverHost,
+  serverPort,
   serverName,
-  serverToken,
+  serverPairingCode,
   serverWorkspacePath,
   dockerContainers,
   dockerAvailable,
@@ -183,9 +184,10 @@ export function RemoteConnectionSettingsStep({
   onWslUserChange,
   onDockerContainerChange,
   onManualDockerContainerChange,
-  onServerUrlChange,
+  onServerHostChange,
+  onServerPortChange,
   onServerNameChange,
-  onServerTokenChange,
+  onServerPairingCodeChange,
   onServerWorkspacePathChange,
   onDockerContainersRefresh,
   onApplySshConfigAlias,
@@ -209,9 +211,10 @@ export function RemoteConnectionSettingsStep({
   wslDistros: WSLDistro[];
   dockerContainer: string;
   manualDockerContainer: string;
-  serverUrl: string;
+  serverHost: string;
+  serverPort: string;
   serverName: string;
-  serverToken: string;
+  serverPairingCode: string;
   serverWorkspacePath: string;
   dockerContainers: DockerContainerInfo[];
   dockerAvailable: boolean | null;
@@ -241,9 +244,10 @@ export function RemoteConnectionSettingsStep({
   onWslUserChange?: (value: string) => void;
   onDockerContainerChange: (value: string) => void;
   onManualDockerContainerChange: (value: string) => void;
-  onServerUrlChange: (value: string) => void;
+  onServerHostChange: (value: string) => void;
+  onServerPortChange: (value: string) => void;
   onServerNameChange: (value: string) => void;
-  onServerTokenChange: (value: string) => void;
+  onServerPairingCodeChange: (value: string) => void;
   onServerWorkspacePathChange: (value: string) => void;
   onDockerContainersRefresh?: () => void;
   onApplySshConfigAlias: (value: SSHConfigAliasOption) => void;
@@ -286,16 +290,13 @@ export function RemoteConnectionSettingsStep({
               onChange={onKindChange}
               disabled={loading}
               options={availableKinds.map((connectionKind) => {
-                const presentation =
-                  connectionKind === "server"
-                    ? undefined
-                    : REMOTE_KIND_PRESENTATION[connectionKind];
+                const presentation = REMOTE_KIND_PRESENTATION[connectionKind];
                 return {
                   value: connectionKind,
                   label: intl.formatMessage({ id: `remote.kind.${connectionKind}` }),
                   // 类型切换的每一项就是连接类型标签，允许使用类型色（DESIGN.md / RDUX-27）。
-                  icon: presentation?.Icon,
-                  selectedClassName: presentation?.selectedClassName,
+                  icon: presentation.Icon,
+                  selectedClassName: presentation.selectedClassName,
                   testId: `remote-kind-${connectionKind}`,
                 };
               })}
@@ -366,9 +367,10 @@ export function RemoteConnectionSettingsStep({
           wslDistros={wslDistros}
           dockerContainer={dockerContainer}
           manualDockerContainer={manualDockerContainer}
-          serverUrl={serverUrl}
+          serverHost={serverHost}
+          serverPort={serverPort}
           serverName={serverName}
-          serverToken={serverToken}
+          serverPairingCode={serverPairingCode}
           serverWorkspacePath={serverWorkspacePath}
           dockerContainers={dockerContainers}
           dockerAvailable={dockerAvailable}
@@ -392,9 +394,10 @@ export function RemoteConnectionSettingsStep({
           setWslUser={onWslUserChange}
           setDockerContainer={onDockerContainerChange}
           setManualDockerContainer={onManualDockerContainerChange}
-          setServerUrl={onServerUrlChange}
+          setServerHost={onServerHostChange}
+          setServerPort={onServerPortChange}
           setServerName={onServerNameChange}
-          setServerToken={onServerTokenChange}
+          setServerPairingCode={onServerPairingCodeChange}
           setServerWorkspacePath={onServerWorkspacePathChange}
           refreshDockerContainers={onDockerContainersRefresh}
         />

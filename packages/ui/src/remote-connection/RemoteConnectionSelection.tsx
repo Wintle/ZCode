@@ -9,8 +9,8 @@ import type {
 } from "@zcode/shared";
 import {
   BoxIcon,
-  CloudIcon,
   FolderIcon,
+  NetworkIcon,
   PlusIcon,
   SearchIcon,
   ServerIcon,
@@ -31,7 +31,7 @@ import {
 import { getRecentRemoteWorkspaceHistory } from "@/RemoteConnectionDialogContent.js";
 import type { AppSettingsConversationWorkspaceMap } from "@/remote/remoteWorkspaceProjection.js";
 
-const icons = { ssh: ServerIcon, docker: BoxIcon, wsl: TerminalIcon, server: CloudIcon };
+const icons = { ssh: ServerIcon, docker: BoxIcon, wsl: TerminalIcon, server: NetworkIcon };
 
 function SelectionRow({
   name,
@@ -300,11 +300,6 @@ export function RemoteConnectionSelection({
             </Button>
           ))}
         </div>
-        {availableKinds.includes("server") ? (
-          <p className="text-pretty text-ui-xs text-remote-foreground-muted">
-            {intl.formatMessage({ id: "remote.kind.server.note" })}
-          </p>
-        ) : null}
       </div>
       <p className="text-pretty border-t border-border pt-3 text-ui-xs text-remote-foreground-muted">
         {intl.formatMessage({ id: "remote.selection.keyboard" })}

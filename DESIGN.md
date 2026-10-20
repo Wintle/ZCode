@@ -649,6 +649,8 @@ adding breakpoint overrides.
 
 `--color-progress-surface` / `--color-progress-surface-foreground` express work in progress, including connecting, automatic recovery and updating. Use `bg-progress-surface` with `text-progress-surface-foreground`; the foreground can also color progress indicators and borders. Four themes define the pair and all parent backgrounds must retain a 4.5:1 text contrast.
 
-Remote state mapping: connected → success (neutral cloud in project rows); connecting/updating → progress; disconnected → neutral surface/subtle foreground; needs attention → warning; failed → destructive. SSH/WSL/Docker tokens are reserved for connection type labels, never connection status. Always include visible status text outside the connected state; recovery attempts are visible text. See the remote device UX specification for the authoritative mapping and glossary.
+Remote state mapping: connected → success (neutral cloud in project rows); connecting/updating → progress; disconnected → neutral surface/subtle foreground; needs attention → warning; failed → destructive. SSH/WSL/Docker/直连 (server) tokens are reserved for connection type labels, never connection status. Always include visible status text outside the connected state; recovery attempts are visible text. See the remote device UX specification for the authoritative mapping and glossary.
+
+直连类型色：`--color-remote-server-surface` / `--color-remote-server-foreground` / `--color-remote-server-border` 为第四种连接类型「直连」的类型 token，取 teal 系，避开 success/warning/destructive/progress 语义色与 SSH（sky）、WSL（green）、Docker（violet）既有类型色；四个内置主题各自定义，同样只允许出现在类型标签、类型切换选中态、关联标签与候选行图标块上。
 
 远程可读辅助文字：`--color-remote-foreground-muted` / `text-remote-foreground-muted` 用于远程向导、设备卡和日志辅助文字、侧栏设备标签与设置导航；侧栏共享的任务/项目视图切换、分组操作及搜索快捷键也沿用此可读辅助文字等级，浅色 `#595959`、深色 `#b3b3b3`，在 sidebar / popover / surface / card / selected / background 上保持至少 4.5:1。Zai Light SSH 类型标签前景为 `#0867ce`，保持与 `#ebf4ff` 底色至少 4.5:1。

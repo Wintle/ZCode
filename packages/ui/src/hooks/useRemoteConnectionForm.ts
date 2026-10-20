@@ -12,20 +12,13 @@ import {
   loadRemoteConnectionDockerOptions,
   resolveDockerContainerSelectionAfterRefresh,
 } from "@/lib/remoteConnectionDockerOptions.js";
+import { DEFAULT_SERVER_REMOTE_PORT } from "@/lib/remoteConnectionWizard.js";
 
 type RemoteKind = RemoteTarget["kind"];
 export type SSHAuthMethod = "password" | "privateKey";
 
-export function buildAvailableKinds(options: {
-  isWindowsDesktop: boolean;
-  isLocalDevelopmentRuntime: boolean;
-}): RemoteKind[] {
-  const kinds: RemoteKind[] = ["ssh"];
-  // Bugfix: Server remote 目前只是本地开发能力。之前无条件放入可选列表，
-  // 导致 production-mode 打包也会露出未对外开放的入口。
-  if (options.isLocalDevelopmentRuntime) {
-    kinds.push("server");
-  }
+export function buildAvailableKinds(options: { isWindowsDesktop: boolean }): RemoteKind[] {
+  const kinds: RemoteKind[] = ["ssh", "server"];
   // Bugfix: 远程连接入口里 WSL 和 SSH 同属主机类连接。
   // Windows 下先放 WSL 再放 Docker，避免 WSL 被 Docker 隔开后在选择页显得离 SSH 很远。
   if (options.isWindowsDesktop) {
@@ -72,9 +65,10 @@ export function useRemoteConnectionForm({
   const [wslUser, setWslUser] = useState("");
   const [dockerContainer, setDockerContainer] = useState("");
   const [manualDockerContainer, setManualDockerContainer] = useState("");
-  const [serverUrl, setServerUrl] = useState("");
+  const [serverHost, setServerHost] = useState("");
+  const [serverPort, setServerPort] = useState(DEFAULT_SERVER_REMOTE_PORT);
   const [serverName, setServerName] = useState("");
-  const [serverToken, setServerToken] = useState("");
+  const [serverPairingCode, setServerPairingCode] = useState("");
   const [serverWorkspacePath, setServerWorkspacePath] = useState("");
   const [sshConfigAliases, setSshConfigAliases] = useState<SSHConfigAliasOption[]>([]);
   const [sshConfigAliasesLoading, setSshConfigAliasesLoading] = useState(false);
@@ -93,12 +87,11 @@ export function useRemoteConnectionForm({
   const applyingSshAliasRef = useRef(false);
   const dockerOptionsActiveLoadIdRef = useRef(0);
   const dockerOptionsInFlightLoadIdRef = useRef<number | null>(null);
-  const isLocalDevelopmentRuntime =
-    platform.isLocalDevelopmentRuntime === true || import.meta.env.DEV === true;
 
+  // 直连（server）是正式的第四种连接类型，不再依赖本地开发运行时门禁。
   const availableKinds = useMemo(
-    () => buildAvailableKinds({ isWindowsDesktop, isLocalDevelopmentRuntime }),
-    [isLocalDevelopmentRuntime, isWindowsDesktop],
+    () => buildAvailableKinds({ isWindowsDesktop }),
+    [isWindowsDesktop],
   );
 
   const resetAssetInstallModeForNewFlow = useEffectEvent(() => {
@@ -400,9 +393,10 @@ export function useRemoteConnectionForm({
     setWslUser("");
     setDockerContainer("");
     setManualDockerContainer("");
-    setServerUrl("");
+    setServerHost("");
+    setServerPort(DEFAULT_SERVER_REMOTE_PORT);
     setServerName("");
-    setServerToken("");
+    setServerPairingCode("");
     setServerWorkspacePath("");
   };
 
@@ -423,9 +417,10 @@ export function useRemoteConnectionForm({
     wslUser,
     dockerContainer,
     manualDockerContainer,
-    serverUrl,
+    serverHost,
+    serverPort,
     serverName,
-    serverToken,
+    serverPairingCode,
     serverWorkspacePath,
     sshConfigAliases,
     sshConfigAliasesLoading,
@@ -448,9 +443,10 @@ export function useRemoteConnectionForm({
     setWslUser,
     setDockerContainer,
     setManualDockerContainer,
-    setServerUrl,
+    setServerHost,
+    setServerPort,
     setServerName,
-    setServerToken,
+    setServerPairingCode,
     setServerWorkspacePath,
     // Bugfix: Docker 容器列表是运行态数据，之前只在进入 Docker 页时拉一次。
     // 下拉每次打开都通过这个回调按需刷新，避免用户看到已过期的容器列表。

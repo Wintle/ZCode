@@ -10,13 +10,39 @@ import {
 import { IZCodeAgentService } from "@zcode/services";
 import { ZCODE_VERSION } from "@zcode/shared";
 import { createCoreHttpServer } from "./http.js";
-import { createIngressToken } from "./ingressToken.js";
+import { createIngressToken, createDeviceTokenStore } from "./ingressToken.js";
+import { createPairingStore } from "./hostCapability.js";
 import { installParentDisconnectHandler } from "./parentDisconnect.js";
 import { resolveCoreServerId } from "./serverIdentity.js";
 import { createTaskActivityTracker } from "./taskActivityTracker.js";
-import { resolveServerLayout } from "../runtime/paths.js";
+import {
+  readServerConfig,
+  resolveListenTarget,
+  resolveServerLayout,
+  type ResolvedListenTarget,
+} from "../runtime/paths.js";
+import {
+  SERVER_LISTEN_HOST_ENV,
+  SERVER_LISTEN_PORT_ENV,
+  coreCommandSchema,
+  type CoreCommand,
+} from "../contracts.js";
 
 declare const __ZCODE_BUILTIN_PROVIDER_CONFIG_JSON__: string | undefined;
+
+/** 生效监听链路：Supervisor 经 env 透传的 CLI flag > <serverRoot>/server-config.json > 默认回环。 */
+async function resolveCoreListenTarget(
+  layout: ReturnType<typeof resolveServerLayout>,
+): Promise<ResolvedListenTarget> {
+  const host = process.env[SERVER_LISTEN_HOST_ENV]?.trim() || undefined;
+  const portRaw = process.env[SERVER_LISTEN_PORT_ENV]?.trim();
+  const port = portRaw ? Number(portRaw) : undefined;
+  if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65_535)) {
+    throw new Error(`Invalid ${SERVER_LISTEN_PORT_ENV}: ${portRaw}`);
+  }
+  const config = await readServerConfig(layout);
+  return resolveListenTarget({ host, port }, config);
+}
 
 export async function runServerCore(generation: number): Promise<void> {
   let shutdown: ((reason: string) => Promise<void>) | undefined;
@@ -27,6 +53,10 @@ export async function runServerCore(generation: number): Promise<void> {
     else parentDisconnected = true;
   });
   const layout = resolveServerLayout(process.env.ZCODE_SERVER_ROOT?.trim());
+  // fail-fast：监听配置在任何重初始化之前解析并校验（非回环缺端口等直接拒绝启动）。
+  const listenTarget = await resolveCoreListenTarget(layout);
+  const deviceStore = await createDeviceTokenStore(layout);
+  const pairingStore = createPairingStore();
   const topicResourcePeers = createTopicResourcePeers();
   const explicitZCodeBuiltinProviderConfigFilePath =
     process.env[ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV]?.trim();
@@ -52,13 +82,18 @@ export async function runServerCore(generation: number): Promise<void> {
       sourceServerId,
       zcodeBuiltinProviderConfigFilePath,
       providerProvisioningTargetEnabled: true,
-    topicResourceRelayChannel: (request) => topicResourcePeers.getChannel(request),
+      topicResourceRelayChannel: (request) => topicResourcePeers.getChannel(request),
     });
   const taskActivityTracker = createTaskActivityTracker(services.getOptional(IZCodeAgentService));
   const ingressToken = await createIngressToken(layout);
   const http = await createCoreHttpServer(services, {
-    serverId: sourceServerId,
+    // 配对过则沿用 devices.json 持久化的安装级 serverId，保证跨安装信息与配对响应一致。
+    serverId: deviceStore.serverId ?? sourceServerId,
     ingressToken,
+    deviceStore,
+    pairingStore,
+    host: listenTarget.host,
+    port: listenTarget.port,
     migrationFailedPathCount,
     workspaceIdentityMapper,
     topicResourcePeers,
@@ -80,6 +115,10 @@ export async function runServerCore(generation: number): Promise<void> {
     type: "ready",
     host: http.host,
     port: http.port,
+    listenHost: http.listenHost,
+    listenPort: http.listenPort,
+    pairingReady: true,
+    pairedDeviceCount: deviceStore.activeCount(),
     version: ZCODE_VERSION,
     ...(process.env.ZCODE_SERVER_RELEASE_ID?.trim()
       ? { releaseId: process.env.ZCODE_SERVER_RELEASE_ID.trim() }
@@ -137,6 +176,8 @@ export async function runServerCore(generation: number): Promise<void> {
     clearInterval(heartbeat);
     activitySubscription.dispose();
     taskActivityTracker.dispose();
+    // 节流的 lastSeenAt 刷新可能仍在计时；退出前落盘，避免丢失本轮活跃记录。
+    await deviceStore.flush().catch(() => undefined);
     await http.close().catch(() => undefined);
     await disposeServiceResourcesAndWait(services).catch(() => undefined);
     await send({ type: "shutdown-ack" });
@@ -151,15 +192,69 @@ export async function runServerCore(generation: number): Promise<void> {
     process.exit(0);
   };
   if (parentDisconnected) void shutdown("parent-disconnected");
-  process.on("message", (message: unknown) => {
-    if (
-      typeof message === "object" &&
-      message !== null &&
-      "command" in message &&
-      message.command === "shutdown"
-    ) {
-      void shutdown("requested");
+  const runManagementCommand = async (
+    command: Exclude<CoreCommand, { command: "shutdown" }>,
+  ): Promise<unknown> => {
+    switch (command.command) {
+      case "pair": {
+        const issued = pairingStore.issue();
+        if (!issued.ok) throw Object.assign(new Error(issued.error), { code: issued.code });
+        return {
+          code: issued.code,
+          expiresAt: issued.expiresAt,
+          host: http.listenHost,
+          port: http.listenPort,
+        };
+      }
+      case "list-devices":
+        return { devices: deviceStore.list() };
+      case "revoke-devices": {
+        // exactly-one 校验：all 与 deviceId 必须且只能给一个（undefined 与 false 等价判断）。
+        if (Boolean(command.all) === Boolean(command.deviceId)) {
+          throw Object.assign(new Error("revoke-devices requires exactly one of deviceId or all"), {
+            code: "invalid-revoke-scope",
+          });
+        }
+        if (command.all) return { revoked: await deviceStore.revokeAll() };
+        const revoked = await deviceStore.revoke(command.deviceId ?? "");
+        if (!revoked) {
+          throw Object.assign(new Error(`Device ${command.deviceId} not found`), {
+            code: "device-not-found",
+          });
+        }
+        return { revoked: [revoked] };
+      }
     }
+  };
+  process.on("message", (message: unknown) => {
+    const parsed = coreCommandSchema.safeParse(message);
+    if (!parsed.success) return;
+    const command = parsed.data;
+    if (command.command === "shutdown") {
+      void shutdown("requested");
+      return;
+    }
+    // 管理命令应答：Core 侧任何失败都折叠成结构化 command-result，不让 IPC 回调悬挂。
+    void (async () => {
+      try {
+        const result = await runManagementCommand(command);
+        await send({ type: "command-result", id: command.id, ok: true, result });
+      } catch (error: unknown) {
+        const rawCode =
+          typeof error === "object" && error !== null && "code" in error
+            ? (error as { code?: unknown }).code
+            : undefined;
+        await send({
+          type: "command-result",
+          id: command.id,
+          ok: false,
+          error: {
+            code: typeof rawCode === "string" && rawCode ? rawCode : "command-failed",
+            message: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+          },
+        });
+      }
+    })();
   });
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
   process.once("SIGINT", () => void shutdown("SIGINT"));

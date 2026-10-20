@@ -133,28 +133,17 @@ describe("RemoteConnectionDialogContent layout", () => {
     expect(html).toContain("remote.recentDirectories");
   });
 
-  it("shows Server between SSH and Windows-only kinds in local development", () => {
+  it("always offers direct connection between SSH and Windows-only kinds", () => {
     expect(
       buildAvailableKinds({
         isWindowsDesktop: true,
-        isLocalDevelopmentRuntime: true,
       }),
     ).toEqual(["ssh", "server", "wsl", "docker"]);
-  });
-
-  it("hides Server from production-mode packaged runtimes", () => {
-    expect(
-      buildAvailableKinds({
-        isWindowsDesktop: true,
-        isLocalDevelopmentRuntime: false,
-      }),
-    ).toEqual(["ssh", "wsl", "docker"]);
     expect(
       buildAvailableKinds({
         isWindowsDesktop: false,
-        isLocalDevelopmentRuntime: false,
       }),
-    ).toEqual(["ssh", "docker"]);
+    ).toEqual(["ssh", "server", "docker"]);
   });
 
   it("shows progress feedback while finalizing a selected remote directory", () => {

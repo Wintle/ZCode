@@ -413,11 +413,14 @@ it.each(["target", "profile"] as const)(
 it.each(["ssh", "server"] as const)("关闭后换目标清空 %s 口令", async (kind) => {
   const target = kind === "ssh" ? sshTarget : { kind, url: "http://server-a" };
   const view = mountDialog({ preferredTarget: target });
+  // 直连的凭据字段是配对码（只经配对产生），换目标时同样必须清空，不能把旧码带进新连接。
   const selector =
-    kind === "ssh" ? 'input[name="remote-ssh-private-key-passphrase"]' : 'input[type="password"]';
+    kind === "ssh"
+      ? 'input[name="remote-ssh-private-key-passphrase"]'
+      : '[data-testid="server-token-input"]';
   await screen.findByRole("button", { name: "建立连接" });
   const input = document.querySelector<HTMLInputElement>(selector)!;
-  fireEvent.change(input, { target: { value: "old-token" } });
+  fireEvent.change(input, { target: { value: "old-code" } });
   await closeAndReopen(view, {
     preferredTarget:
       kind === "ssh" ? { ...sshTarget, host: "new.example.com" } : { kind, url: "http://server-b" },
@@ -1057,12 +1060,14 @@ it("Docker 手动输入和列表选择有互斥的可访问控件", async () => 
   await screen.findByText("没有运行中的容器");
 });
 
-it("正式版没有开发 Server 提示，未选别名没有填充提示，密码可以显示隐藏", async () => {
+it("正式版选择屏提供直连入口且无 dev 提示，未选别名没有填充提示，密码可以显示隐藏", async () => {
   vi.stubEnv("DEV", false);
   ports.platform.isLocalDevelopmentRuntime = false;
   mountDialog();
   await screen.findByRole("searchbox");
-  expect(screen.queryByText(/Server/)).toBeNull();
+  // 直连是正式入口：不再受 dev 门禁影响，也没有旧的开发提示文案。
+  expect(screen.getByRole("button", { name: "直连局域网电脑" })).toBeTruthy();
+  expect(screen.queryByText(/仅在开发模式/)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "新建 SSH 连接" }));
   expect(screen.queryByText(zhCN["ssh.configAliasDescription"])).toBeNull();
   const password = screen.getByTestId("ssh-password-input");

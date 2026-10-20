@@ -166,6 +166,19 @@ export function resolveRemoteConnectionPresentation(
     tone = "warning";
     icon = "cloud-alert";
     action = "credentials";
+  } else if (reason?.category === "device-revoked" || reason?.category === "auth-required") {
+    // 直连吊销/需鉴权是「需要处理 · 重新配对」终态，不参与自动重试。
+    status = "pending";
+    short = "needsPairing";
+    tone = "warning";
+    icon = "cloud-alert";
+    action = "re-pair";
+  } else if (reason?.category === "pairing-code-invalid") {
+    status = "failed";
+    short = "failed";
+    tone = "danger";
+    icon = "cloud-x";
+    action = "pairing-retry";
   } else if (input.state === "pending") {
     status = "pending";
     short = "pending";
@@ -261,9 +274,22 @@ export function formatRemoteDeviceName(
   }
 }
 
-export function formatRemoteConnectionDescription(target?: RemoteTarget): string {
+/** 无 i18n 上下文时的类型名回退；有 intl 的调用方传入 remote.kind.* 的本地化文本。 */
+const DEFAULT_REMOTE_KIND_LABEL: Record<RemoteTarget["kind"], string> = {
+  ssh: "SSH",
+  wsl: "WSL",
+  docker: "Docker",
+  server: "Direct",
+};
+
+/** 连接描述投影，形如 `直连 · 192.168.1.5:8737`；类型名由调用方按当前语言解析。 */
+export function formatRemoteConnectionDescription(
+  target?: RemoteTarget,
+  formatKindLabel: (kind: RemoteTarget["kind"]) => string = (kind) =>
+    DEFAULT_REMOTE_KIND_LABEL[kind],
+): string {
   return target
-    ? `${{ ssh: "SSH", wsl: "WSL", docker: "Docker", server: "HTTP" }[target.kind]} · ${formatRemoteProjectConnectionAddress(target) ?? ""}`
+    ? `${formatKindLabel(target.kind)} · ${formatRemoteProjectConnectionAddress(target) ?? ""}`
     : "";
 }
 

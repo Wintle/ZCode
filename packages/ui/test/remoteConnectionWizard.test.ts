@@ -279,7 +279,7 @@ describe("buildRemoteTarget", () => {
     });
   });
 
-  it("builds a server remote target from URL and optional token", () => {
+  it("builds a server remote target from host, port and pairing code", () => {
     const result = buildRemoteTarget(intl, {
       kind: "server",
       host: "",
@@ -291,40 +291,61 @@ describe("buildRemoteTarget", () => {
       privateKeyPassphrase: "",
       wslDistro: "",
       dockerContainer: "",
-      serverUrl: " https://studio.example.com/zcode/ ",
+      serverHost: " 192.168.1.5 ",
+      serverPort: " 8737 ",
+      serverPairingCode: " AB12-CD34 ",
       serverName: " Studio ",
-      serverToken: " secret-token ",
       serverWorkspacePath: " /srv/project ",
     });
 
     expect(result).toEqual({
       target: {
         kind: "server",
-        url: "https://studio.example.com/zcode/",
+        url: "http://192.168.1.5:8737",
         name: "Studio",
-        token: "secret-token",
+        pairingCode: "AB12-CD34",
         workspacePath: "/srv/project",
       },
     });
   });
 
-  it("rejects server targets without URL", () => {
-    const result = buildRemoteTarget(intl, {
+  it("defaults the server port to 8737 and brackets IPv6 hosts", () => {
+    expect(
+      buildRemoteTarget(intl, {
+        ...emptyServer,
+        serverHost: "fe80::1",
+        serverPairingCode: "code",
+      }).target,
+    ).toMatchObject({
       kind: "server",
-      host: "",
-      port: "22",
-      username: "",
-      sshAuthMethod: "password",
-      password: "",
-      privateKeyPath: "",
-      privateKeyPassphrase: "",
-      wslDistro: "",
-      dockerContainer: "",
-      serverUrl: " ",
+      url: "http://[fe80::1]:8737",
     });
+    expect(
+      buildRemoteTarget(intl, {
+        ...emptyServer,
+        serverHost: "[fe80::1]",
+        serverPort: "9000",
+        serverPairingCode: "code",
+      }).target,
+    ).toMatchObject({
+      kind: "server",
+      url: "http://[fe80::1]:9000",
+    });
+  });
 
-    expect(result).toEqual({
-      errorMessage: "server.validation.urlRequired",
+  it("rejects server targets without host, with an invalid port or without pairing code", () => {
+    expect(buildRemoteTarget(intl, { ...emptyServer, serverPairingCode: "code" })).toEqual({
+      errorMessage: "server.validation.hostRequired",
+    });
+    expect(
+      buildRemoteTarget(intl, { ...emptyServer, serverHost: "10.0.0.2", serverPort: "70000" }),
+    ).toEqual({
+      errorMessage: "server.validation.port",
+    });
+    expect(
+      buildRemoteTarget(intl, { ...emptyServer, serverHost: "10.0.0.2", serverPairingCode: " " }),
+    ).toEqual({
+      errorMessage: "server.validation.pairingCodeRequired",
     });
   });
 });
@@ -340,6 +361,14 @@ const emptySsh = {
   privateKeyPassphrase: "",
   wslDistro: "",
   dockerContainer: "",
+};
+
+const emptyServer = {
+  ...emptySsh,
+  kind: "server" as const,
+  serverHost: "",
+  serverPort: "",
+  serverPairingCode: "",
 };
 
 describe("collectRemoteFormFieldErrors", () => {
@@ -393,9 +422,18 @@ describe("collectRemoteFormFieldErrors", () => {
     expect(
       collectRemoteFormFieldErrors(intl, { ...emptySsh, kind: "wsl", wslUser: "bad:user" }),
     ).toEqual([{ field: "wslUser", message: "wsl.validation.invalidUser" }]);
+    expect(collectRemoteFormFieldErrors(intl, emptyServer)).toEqual([
+      { field: "host", message: "server.validation.hostRequired" },
+      { field: "serverPairingCode", message: "server.validation.pairingCodeRequired" },
+    ]);
     expect(
-      collectRemoteFormFieldErrors(intl, { ...emptySsh, kind: "server", serverUrl: "nope" }),
-    ).toEqual([{ field: "serverUrl", message: "server.validation.invalidUrl" }]);
+      collectRemoteFormFieldErrors(intl, {
+        ...emptyServer,
+        serverHost: "192.168.1.5",
+        serverPort: "abc",
+        serverPairingCode: "code",
+      }),
+    ).toEqual([{ field: "port", message: "server.validation.port" }]);
   });
 });
 
@@ -410,7 +448,7 @@ describe("formatRemoteDraftPreview", () => {
     ).toBe("root@h:2222");
   });
 
-  it("Docker 优先手动输入，WSL 使用发行版，Server 使用 URL", () => {
+  it("Docker 优先手动输入，WSL 使用发行版，Server 使用 host:port", () => {
     expect(
       formatRemoteDraftPreview({
         ...emptySsh,
@@ -426,8 +464,12 @@ describe("formatRemoteDraftPreview", () => {
     expect(formatRemoteDraftPreview({ ...emptySsh, kind: "wsl", wslDistro: "Ubuntu" })).toBe(
       "Ubuntu",
     );
+    expect(formatRemoteDraftPreview(emptyServer)).toBeNull();
+    expect(formatRemoteDraftPreview({ ...emptyServer, serverHost: "192.168.1.5" })).toBe(
+      "192.168.1.5:8737",
+    );
     expect(
-      formatRemoteDraftPreview({ ...emptySsh, kind: "server", serverUrl: "https://example.com" }),
-    ).toBe("https://example.com");
+      formatRemoteDraftPreview({ ...emptyServer, serverHost: "10.0.0.3", serverPort: "9000" }),
+    ).toBe("10.0.0.3:9000");
   });
 });

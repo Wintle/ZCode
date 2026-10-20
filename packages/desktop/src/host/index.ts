@@ -1939,6 +1939,8 @@ async function createWindowRemoteConnectionHandle(params: {
         signal: params.signal,
         fetchImpl: requireActiveHostApiNetworkTransport().fetch,
         commitMembership: admission.commit,
+        // 配对换回的设备 Token 回传 prepare 层落凭据；连接层不写 credential，保持单一 owner。
+        onDeviceToken: (deviceToken) => admission.persistDeviceToken(deviceToken),
         topicResourceChannel: topicResourceRelay.channel,
         onClose: ({ code, reason }) => {
           sourceClosed = true;

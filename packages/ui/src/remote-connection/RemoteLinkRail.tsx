@@ -1,5 +1,15 @@
 import type { RemoteTarget } from "@zcode/shared";
 
+/** 直连目标统一展示 host:port；URL 只是存储形态，不直接回显给用户。 */
+function formatServerRemoteAddress(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}:${parsed.port || "8737"}`;
+  } catch {
+    return url;
+  }
+}
+
 export function formatRemoteLinkRailTarget(target: RemoteTarget): string {
   switch (target.kind) {
     case "ssh":
@@ -9,7 +19,7 @@ export function formatRemoteLinkRailTarget(target: RemoteTarget): string {
     case "docker":
       return `Docker · ${target.container}`;
     case "server":
-      return target.url;
+      return formatServerRemoteAddress(target.url);
   }
 }
 
@@ -22,6 +32,6 @@ export function formatRemoteLinkRailDevice(target: RemoteTarget): string {
     case "docker":
       return target.container;
     case "server":
-      return target.name ?? target.url;
+      return target.name?.trim() || formatServerRemoteAddress(target.url);
   }
 }

@@ -67,14 +67,11 @@ function SettingsPreviewText({ preview }: { preview: RemoteSettingsPreview }) {
   const placeholder =
     preview.kind === "ssh"
       ? "user@host:22"
-      : intl.formatMessage({
-          id:
-            preview.kind === "docker"
-              ? "docker.selectContainer"
-              : preview.kind === "wsl"
-                ? "wsl.defaultDistro"
-                : "server.urlPlaceholder",
-        });
+      : preview.kind === "server"
+        ? "192.168.1.5:8737"
+        : intl.formatMessage({
+            id: preview.kind === "docker" ? "docker.selectContainer" : "wsl.defaultDistro",
+          });
   return (
     <DialogDescription
       data-testid={TID_REMOTE_NEW_CONNECTION_PREVIEW}
@@ -142,9 +139,7 @@ export function RemoteConnectionWizardHeader({
     >
       <div className="flex flex-wrap items-center gap-2">
         <DialogTitle className="text-ui-lg font-medium">{title}</DialogTitle>
-        {showKindTag && settingsPreview.kind !== "server" ? (
-          <RemoteConnectionKindTag kind={settingsPreview.kind} />
-        ) : null}
+        {showKindTag ? <RemoteConnectionKindTag kind={settingsPreview.kind} /> : null}
       </div>
       {settingsPreview ? (
         <SettingsPreviewText preview={settingsPreview} />

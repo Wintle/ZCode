@@ -2,6 +2,10 @@ import {
   conversationShareConnectionScopeFactory,
   SourceServerWorkspaceIdentityMapper,
 } from "@zcode/services/node";
+import { mkdtemp } from "node:fs/promises";
+import { createServer } from "node:net";
+import { networkInterfaces, tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -17,8 +21,19 @@ import {
   type ProviderProvisioningEnvelope,
   type ProviderProvisioningResult,
 } from "@zcode/shared";
-import { createHostCapabilityStore } from "../src/server-core/hostCapability.js";
+import {
+  PAIRING_CODE_TTL_MS,
+  authErrorSchema,
+  pairErrorSchema,
+  pairSuccessSchema,
+} from "../src/contracts.js";
+import {
+  createHostCapabilityStore,
+  createPairingStore,
+} from "../src/server-core/hostCapability.js";
+import { createDeviceTokenStore } from "../src/server-core/ingressToken.js";
 import { createCoreHttpServer } from "../src/server-core/http.js";
+import { resolveServerLayout } from "../src/runtime/paths.js";
 
 import {
   Emitter,
@@ -187,6 +202,32 @@ async function expectWebSocketRejected(url: string, statusCode: number): Promise
     });
     socket.once("error", reject);
   });
+}
+
+/** 机器上非回环的 IPv4 地址；无 LAN 环境时跳过依赖真实网卡的用例。 */
+const lanAddress =
+  Object.values(networkInterfaces())
+    .flat()
+    .find((entry) => entry && !entry.internal && (entry.family === "IPv4" || entry.family === 4))
+    ?.address ?? undefined;
+
+/** 预留一个空闲端口（关闭后立即复用，避免非回环监听用例依赖固定端口）。 */
+async function reservePort(host: string): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, host, () => resolve());
+  });
+  const address = probe.address();
+  if (!address || typeof address === "string") throw new Error("probe did not bind a port");
+  const port = address.port;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
+}
+
+async function createLayout(): Promise<ReturnType<typeof resolveServerLayout>> {
+  const root = await mkdtemp(join(tmpdir(), "zcode-lan-corehttp-"));
+  return resolveServerLayout(join(root, "server"));
 }
 
 describe("standalone Server Core ingress", () => {
@@ -546,9 +587,349 @@ describe("standalone Server Core ingress", () => {
     expect(rejected.status).toBe(401);
   });
 
-  it("rejects non-loopback listeners until authenticated ingress is implemented", async () => {
+  it("rejects non-loopback listeners when token authentication cannot be enabled", async () => {
+    // fail-closed：非回环缺端口优先 fail-fast（未给出的端口不进入监听尝试）。
     await expect(
       createCoreHttpServer(new ServiceCollection(), { host: "0.0.0.0" }),
-    ).rejects.toThrow(/non-loopback.*authentication|loopback/i);
+    ).rejects.toThrow(/explicit port/i);
+    // 即使启用了鉴权，非回环缺端口也必须 fail-fast（不允许动态端口对外监听）。
+    await expect(
+      createCoreHttpServer(new ServiceCollection(), { host: "0.0.0.0", ingressToken: "t" }),
+    ).rejects.toThrow(/explicit port/i);
+    // fail-closed：没有 ingress / 设备 Token 校验的对外监听一律拒绝启动。
+    await expect(
+      createCoreHttpServer(new ServiceCollection(), { host: "0.0.0.0", port: 18737 }),
+    ).rejects.toThrow(/requires authentication/i);
   });
+
+  it("binds a non-loopback listener once token authentication is enabled", async () => {
+    const port = await reservePort("127.0.0.1");
+    const server = await createCoreHttpServer(new ServiceCollection(), {
+      host: "0.0.0.0",
+      port,
+      ingressToken: "ingress-secret",
+    });
+    servers.push(server);
+    expect(server.host).toBe("0.0.0.0");
+    expect(server.listenHost).toBe("0.0.0.0");
+    expect(server.listenPort).toBe(port);
+    // 通配监听覆盖回环：本机管理面仍可达，未鉴权请求按既有语义降级。
+    const info = await fetch(`http://127.0.0.1:${port}/api/server-info`);
+    expect(info.status).toBe(200);
+    const anonymous = serverRemoteAnonymousInfoSchema.parse(await info.json());
+    expect(anonymous).toMatchObject({ authRequired: true });
+    expect((await fetch(`http://127.0.0.1:${port}/ws`)).status).toBe(401);
+  });
+
+  it.skipIf(lanAddress === undefined)(
+    "keeps the loopback listener and adds a second socket for a specific LAN address",
+    async () => {
+      const port = await reservePort(lanAddress ?? "127.0.0.1");
+      const server = await createCoreHttpServer(new ServiceCollection(), {
+        host: lanAddress ?? "",
+        port,
+        ingressToken: "ingress-secret",
+      });
+      servers.push(server);
+      // Core 始终绑定 loopback（主监听），指定 LAN 地址为第二个 listen socket，共享同一 handler。
+      expect(server.host).toBe("127.0.0.1");
+      expect(server.listenHost).toBe(lanAddress);
+      expect(server.port).toBe(port);
+      const viaLoopback = await fetch(`http://127.0.0.1:${port}/api/server-info`);
+      expect(viaLoopback.status).toBe(200);
+      const viaLan = await fetch(`http://${lanAddress ?? ""}:${port}/api/server-info`);
+      expect(viaLan.status).toBe(200);
+    },
+  );
+
+  it("accepts ingress or device tokens and classifies 401s with stable codes", async () => {
+    const layout = await createLayout();
+    const deviceStore = await createDeviceTokenStore(layout);
+    const server = await createCoreHttpServer(new ServiceCollection(), {
+      serverId: "server-installation-id",
+      ingressToken: "ingress-secret",
+      deviceStore,
+    });
+    servers.push(server);
+    const base = `http://${server.host}:${server.port}`;
+    const { deviceToken, device } = await deviceStore.issue({ name: "laptop" });
+
+    // 两类 token 都能拿完整 server-info。
+    const viaIngress = await fetch(`${base}/api/server-info`, {
+      headers: { authorization: "Bearer ingress-secret" },
+    });
+    expect(serverRemoteInfoSchema.parse(await viaIngress.json())).toMatchObject({
+      serverId: "server-installation-id",
+    });
+    const viaDevice = await fetch(
+      `${base}/api/server-info?token=${encodeURIComponent(deviceToken)}`,
+    );
+    expect(serverRemoteInfoSchema.parse(await viaDevice.json())).toMatchObject({
+      serverId: "server-installation-id",
+    });
+
+    // 缺失 / 无效 → auth-required；已吊销 → device-revoked。
+    const missing = await fetch(`${base}/api/rpc-host-capability`, { method: "POST" });
+    expect(missing.status).toBe(401);
+    expect(authErrorSchema.parse(await missing.json()).code).toBe("auth-required");
+    const invalid = await fetch(`${base}/api/rpc-host-capability`, {
+      method: "POST",
+      headers: { authorization: "Bearer wrong-token" },
+    });
+    expect(invalid.status).toBe(401);
+    expect(authErrorSchema.parse(await invalid.json()).code).toBe("auth-required");
+
+    await deviceStore.revoke(device.id);
+    const revoked = await fetch(`${base}/api/server-info`, {
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    expect(revoked.status).toBe(401);
+    expect(authErrorSchema.parse(await revoked.json()).code).toBe("device-revoked");
+  });
+
+  it("keeps the anonymous server-info degradation when only a device store is enabled", async () => {
+    const layout = await createLayout();
+    const deviceStore = await createDeviceTokenStore(layout);
+    const server = await createCoreHttpServer(new ServiceCollection(), { deviceStore });
+    servers.push(server);
+    const base = `http://${server.host}:${server.port}`;
+
+    const anonymousBody = await fetch(`${base}/api/server-info`).then((response) =>
+      response.json(),
+    );
+    expect(anonymousBody).not.toHaveProperty("serverId");
+    expect(serverRemoteAnonymousInfoSchema.parse(anonymousBody)).toMatchObject({
+      authRequired: true,
+    });
+
+    const { deviceToken } = await deviceStore.issue();
+    const authenticated = await fetch(`${base}/api/server-info`, {
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    expect(serverRemoteInfoSchema.parse(await authenticated.json())).toMatchObject({
+      authRequired: true,
+    });
+  });
+
+  it("pairs over loopback with a live code, issues a working device token, and rejects replay", async () => {
+    const layout = await createLayout();
+    const deviceStore = await createDeviceTokenStore(layout);
+    const pairingStore = createPairingStore();
+    const server = await createCoreHttpServer(new ServiceCollection(), {
+      serverId: "server-installation-id",
+      ingressToken: "ingress-secret",
+      deviceStore,
+      pairingStore,
+    });
+    servers.push(server);
+    const base = `http://${server.host}:${server.port}`;
+
+    const issued = pairingStore.issue();
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+    const response = await fetch(`${base}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: issued.code.toUpperCase() }),
+    });
+    expect(response.status).toBe(200);
+    const payload = pairSuccessSchema.parse(await response.json());
+    expect(payload.serverId).toBe("server-installation-id");
+    expect(Buffer.from(payload.deviceToken, "base64url").length).toBeGreaterThanOrEqual(32);
+    expect(deviceStore.activeCount()).toBe(1);
+
+    // 签发的设备 Token 立即可用；配对码一次性，重放是 invalid。
+    const capability = await fetch(`${base}/api/rpc-host-capability`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${payload.deviceToken}` },
+    });
+    expect(capability.status).toBe(200);
+    const replay = await fetch(`${base}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: issued.code }),
+    });
+    expect(replay.status).toBe(400);
+    expect(pairErrorSchema.parse(await replay.json()).code).toBe("pairing-code-invalid");
+
+    // 非法请求体与错码都是 4xx 契约响应。
+    const malformed = await fetch(`${base}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(malformed.status).toBe(400);
+    expect(pairErrorSchema.parse(await malformed.json()).error).toBeTruthy();
+    const wrong = await fetch(`${base}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "0000000000000000" }),
+    });
+    expect(wrong.status).toBe(400);
+    expect(pairErrorSchema.parse(await wrong.json()).code).toBe("pairing-code-invalid");
+  });
+
+  it("returns pairing-code-expired for codes older than the TTL", async () => {
+    const layout = await createLayout();
+    const deviceStore = await createDeviceTokenStore(layout);
+    let now = 0;
+    const pairingStore = createPairingStore({ now: () => now });
+    const server = await createCoreHttpServer(new ServiceCollection(), {
+      ingressToken: "ingress-secret",
+      deviceStore,
+      pairingStore,
+    });
+    servers.push(server);
+
+    const issued = pairingStore.issue();
+    if (!issued.ok) throw new Error("issue failed");
+    now = PAIRING_CODE_TTL_MS;
+    const response = await fetch(`http://${server.host}:${server.port}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: issued.code }),
+    });
+    expect(response.status).toBe(410);
+    expect(pairErrorSchema.parse(await response.json()).code).toBe("pairing-code-expired");
+    expect(deviceStore.activeCount()).toBe(0);
+  });
+
+  it("rate-limits all pairing attempts after 5 failures within a minute", async () => {
+    const layout = await createLayout();
+    const deviceStore = await createDeviceTokenStore(layout);
+    let now = 0;
+    const pairingStore = createPairingStore({ now: () => now });
+    const server = await createCoreHttpServer(new ServiceCollection(), {
+      ingressToken: "ingress-secret",
+      deviceStore,
+      pairingStore,
+    });
+    servers.push(server);
+    const base = `http://${server.host}:${server.port}`;
+    const attempt = async (code: string): Promise<Response> =>
+      fetch(`${base}/api/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+
+    // 先发一个合法码，冻结期间验证它被拒且未被消费。
+    const issued = pairingStore.issue();
+    if (!issued.ok) throw new Error("issue failed");
+    for (let index = 0; index < 5; index++) {
+      const failed = await attempt("0000000000000000");
+      expect(failed.status).toBe(400);
+      expect(pairErrorSchema.parse(await failed.json()).code).toBe("pairing-code-invalid");
+    }
+    const limited = await attempt("0000000000000000");
+    expect(limited.status).toBe(429);
+    expect(pairErrorSchema.parse(await limited.json()).code).toBe("pairing-rate-limited");
+
+    // 冻结期间合法码同样被拒，且不被消费（随后窗口滑过，同一码可成功配对）。
+    const duringFreeze = await attempt(issued.code);
+    expect(duringFreeze.status).toBe(429);
+    expect(deviceStore.activeCount()).toBe(0);
+    now += 61_000;
+    const afterWindow = await attempt(issued.code);
+    expect(afterWindow.status).toBe(200);
+    expect(deviceStore.activeCount()).toBe(1);
+  });
+
+  it("rejects pairing when disabled and refuses the device limit without burning the code", async () => {
+    // 未注入配对设施 → pairing-disabled。
+    const disabled = await createCoreHttpServer(new ServiceCollection(), {
+      ingressToken: "ingress-secret",
+    });
+    servers.push(disabled);
+    const disabledResponse = await fetch(`http://${disabled.host}:${disabled.port}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "0000000000000000" }),
+    });
+    expect(disabledResponse.status).toBe(403);
+    expect(pairErrorSchema.parse(await disabledResponse.json()).code).toBe("pairing-disabled");
+
+    // 设备上限：先拒绝配对，但不消费配对码；吊销后同一码仍可配对。
+    const layout = await createLayout();
+    const deviceStore = await createDeviceTokenStore(layout);
+    const pairingStore = createPairingStore();
+    const server = await createCoreHttpServer(new ServiceCollection(), {
+      ingressToken: "ingress-secret",
+      deviceStore,
+      pairingStore,
+    });
+    servers.push(server);
+    const first = await deviceStore.issue();
+    for (let index = 1; index < 16; index++) await deviceStore.issue();
+    const issued = pairingStore.issue();
+    if (!issued.ok) throw new Error("issue failed");
+    const overLimit = await fetch(`http://${server.host}:${server.port}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: issued.code }),
+    });
+    expect(overLimit.status).toBe(403);
+    await deviceStore.revoke(first.device.id);
+    const afterRevoke = await fetch(`http://${server.host}:${server.port}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: issued.code }),
+    });
+    expect(afterRevoke.status).toBe(200);
+  });
+
+  it.skipIf(lanAddress === undefined)(
+    "accepts a LAN peer holding a valid code and folds its failures into the shared backoff",
+    async () => {
+      const layout = await createLayout();
+      const deviceStore = await createDeviceTokenStore(layout);
+      let now = 0;
+      const pairingStore = createPairingStore({ now: () => now });
+      const port = await reservePort(lanAddress ?? "127.0.0.1");
+      const server = await createCoreHttpServer(new ServiceCollection(), {
+        host: lanAddress ?? "",
+        port,
+        ingressToken: "ingress-secret",
+        deviceStore,
+        pairingStore,
+      });
+      servers.push(server);
+      const attempt = async (code: string, peer: "lan" | "loopback"): Promise<Response> =>
+        fetch(`http://${peer === "lan" ? (lanAddress ?? "") : "127.0.0.1"}:${port}/api/pair`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ code }),
+        });
+
+      // 非回环 peer 持有效码可直接配对成功：不要求预先鉴权，也不再返回 pairing-disabled。
+      const issued = pairingStore.issue();
+      if (!issued.ok) throw new Error("issue failed");
+      const remote = await attempt(issued.code, "lan");
+      expect(remote.status).toBe(200);
+      expect(deviceStore.activeCount()).toBe(1);
+
+      // 非回环 peer 的错码进入与本机一致的退避：同样计数、同样冻结。
+      for (let index = 0; index < 5; index++) {
+        const failed = await attempt("0000000000000000", "lan");
+        expect(failed.status).toBe(400);
+        expect(pairErrorSchema.parse(await failed.json()).code).toBe("pairing-code-invalid");
+      }
+      const limitedRemote = await attempt("0000000000000000", "lan");
+      expect(limitedRemote.status).toBe(429);
+      expect(pairErrorSchema.parse(await limitedRemote.json()).code).toBe("pairing-rate-limited");
+      // 冻结是共享状态：本机 loopback peer 同时被限流。
+      const limitedLocal = await attempt("0000000000000000", "loopback");
+      expect(limitedLocal.status).toBe(429);
+      expect(pairErrorSchema.parse(await limitedLocal.json()).code).toBe("pairing-rate-limited");
+
+      // 窗口滑过解冻后，LAN peer 的新有效码仍可成功配对。
+      now += 61_000;
+      expect(pairingStore.isFrozen()).toBe(false);
+      const second = pairingStore.issue();
+      if (!second.ok) throw new Error("issue failed");
+      const afterWindow = await attempt(second.code, "lan");
+      expect(afterWindow.status).toBe(200);
+      expect(deviceStore.activeCount()).toBe(2);
+    },
+  );
 });

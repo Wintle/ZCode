@@ -1,6 +1,8 @@
-import { realpath } from "node:fs/promises";
+import { readFile, realpath, rename, writeFile, mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+import { isLoopbackHost, serverListenConfigSchema, type ServerListenConfig } from "../contracts.js";
 
 export interface ServerLayout {
   readonly dataBaseDir: string;
@@ -14,6 +16,8 @@ export interface ServerLayout {
   readonly stableBinDir: string;
   readonly statusFile: string;
   readonly ingressTokenFile: string;
+  readonly serverConfigFile: string;
+  readonly devicesFile: string;
   readonly lockFile: string;
   readonly controlEndpoint: string;
   readonly serviceDir: string;
@@ -42,6 +46,8 @@ export function resolveServerLayout(serverRoot = getDefaultServerDataRoot()): Se
     stableBinDir: join(root, "bin"),
     statusFile: join(runDir, "status.json"),
     ingressTokenFile: join(runDir, "ingress-token"),
+    serverConfigFile: join(root, "server-config.json"),
+    devicesFile: join(root, "devices.json"),
     lockFile: join(runDir, "server.lock"),
     controlEndpoint:
       process.platform === "win32"
@@ -146,4 +152,68 @@ export function assertServerDataRoot(serverRoot: string): string {
 
 export function serverDataRootFromBase(baseDir: string): string {
   return join(resolve(baseDir), ".zcode", "server");
+}
+
+// ---- <serverRoot>/server-config.json 监听配置 ----
+
+/** 读取监听配置；文件缺失表示"未配置"，JSON/schema 损坏必须 fail-fast 而不是静默降级。 */
+export async function readServerConfig(layout: ServerLayout): Promise<ServerListenConfig | null> {
+  let raw: string;
+  try {
+    raw = await readFile(layout.serverConfigFile, "utf8");
+  } catch (error: unknown) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    return serverListenConfigSchema.parse(JSON.parse(raw));
+  } catch (error: unknown) {
+    throw new Error(
+      `Invalid server config at ${layout.serverConfigFile}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+/** 原子写入监听配置（临时文件 + rename），与 status/ingress token 落盘语义一致。 */
+export async function writeServerConfig(
+  layout: ServerLayout,
+  config: ServerListenConfig,
+): Promise<void> {
+  const parsed = serverListenConfigSchema.parse(config);
+  await mkdir(layout.serverRoot, { recursive: true, mode: 0o700 });
+  const temporary = `${layout.serverConfigFile}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(parsed, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await rename(temporary, layout.serverConfigFile);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
+export interface ResolvedListenTarget {
+  host: string;
+  port?: number;
+}
+
+/**
+ * 生效监听链路：CLI > 配置文件 > 默认。
+ * 非回环 host 必须有 1～65535 的显式端口；缺失或 0（动态端口）都会让控制端无法定位，
+ * 一律 fail-fast 而不是静默换端口。
+ */
+export function resolveListenTarget(
+  cli: { host?: string | undefined; port?: number | undefined },
+  config: ServerListenConfig | null | undefined,
+): ResolvedListenTarget {
+  const host = cli.host?.trim() || config?.listen?.host?.trim() || "127.0.0.1";
+  const port = cli.port ?? config?.listen?.port;
+  if (!isLoopbackHost(host) && !(typeof port === "number" && port >= 1)) {
+    throw new Error(
+      `Non-loopback listen host ${host} requires an explicit --port 1-65535 (refusing to start on a dynamic port)`,
+    );
+  }
+  return { host, ...(port !== undefined ? { port } : {}) };
 }

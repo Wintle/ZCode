@@ -27,6 +27,8 @@ export interface ServiceCommandResult {
 export function createDaemonServiceDescriptor(options: {
   platform: ServicePlatform;
   layout: ServerLayout;
+  /** 生效监听参数（如 ["--host", "0.0.0.0", "--port", "8737"]）；重装服务不丢配置。 */
+  listenArgs?: readonly string[];
 }): ServiceDescriptor {
   return createServiceDescriptor({
     platform: options.platform,
@@ -34,7 +36,14 @@ export function createDaemonServiceDescriptor(options: {
       options.layout.stableBinDir,
       options.platform === "win32" ? "zcode.cmd" : "zcode",
     ),
-    args: ["serve", "--supervisor", "--service-entry", "--server-root", options.layout.serverRoot],
+    args: [
+      "serve",
+      "--supervisor",
+      "--service-entry",
+      "--server-root",
+      options.layout.serverRoot,
+      ...(options.listenArgs ?? []),
+    ],
     name: `com.zhipu.zcode.server.${stablePathId(options.layout.serverRoot)}`,
   });
 }

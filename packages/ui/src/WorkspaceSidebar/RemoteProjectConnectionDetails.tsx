@@ -70,7 +70,11 @@ export function RemoteProjectConnectionDetails({
         <dt className="text-remote-foreground-muted">
           {intl.formatMessage({ id: "workspaceSidebar.projectLine" })}
         </dt>
-        <dd className="min-w-0 break-all">{formatRemoteConnectionDescription(tab.remoteTarget)}</dd>
+        <dd className="min-w-0 break-all">
+          {formatRemoteConnectionDescription(tab.remoteTarget, (kind) =>
+            intl.formatMessage({ id: `remote.kind.${kind}` }),
+          )}
+        </dd>
         <dt className="text-remote-foreground-muted">
           {intl.formatMessage({ id: "workspaceSidebar.projectPath" })}
         </dt>

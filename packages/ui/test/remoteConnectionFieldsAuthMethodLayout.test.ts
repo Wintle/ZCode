@@ -72,9 +72,10 @@ function renderRemoteConnectionFields(
           wslDistros: [],
           dockerContainer: "",
           manualDockerContainer: "",
-          serverUrl: "",
+          serverHost: "",
           serverName: "",
-          serverToken: "",
+          serverPort: "8737",
+          serverPairingCode: "",
           serverWorkspacePath: "",
           dockerContainers: [],
           dockerAvailable: null,
@@ -96,9 +97,10 @@ function renderRemoteConnectionFields(
           setWslDistro: vi.fn(),
           setDockerContainer: vi.fn(),
           setManualDockerContainer: vi.fn(),
-          setServerUrl: vi.fn(),
+          setServerHost: vi.fn(),
           setServerName: vi.fn(),
-          setServerToken: vi.fn(),
+          setServerPort: vi.fn(),
+          setServerPairingCode: vi.fn(),
           setServerWorkspacePath: vi.fn(),
           ...overrides,
         }),
@@ -123,17 +125,22 @@ it("认证与下载方式有组名和选中状态，密码可显示再隐藏", (
   expect(within(download).getByRole("button", { pressed: false })).toBeTruthy();
 });
 
-it.each([
-  { kind: "ssh", sshAuthMethod: "privateKey", label: "私钥口令（可选）" },
-  { kind: "server", sshAuthMethod: "password", label: "Token（可选）" },
-] as const)("$kind 的口令字段可以显示和隐藏且标签关联", ({ kind, sshAuthMethod, label }) => {
-  renderRemoteConnectionFields("zh-CN", { kind, sshAuthMethod });
-  const input = screen.getByLabelText(label);
+it("私钥口令字段可以显示和隐藏且标签关联", () => {
+  renderRemoteConnectionFields("zh-CN", { kind: "ssh", sshAuthMethod: "privateKey" });
+  const input = screen.getByLabelText("私钥口令（可选）");
   expect(input.getAttribute("type")).toBe("password");
   fireEvent.click(screen.getByRole("button", { name: "显示密码" }));
   expect(input.getAttribute("type")).toBe("text");
   fireEvent.click(screen.getByRole("button", { name: "隐藏密码" }));
   expect(input.getAttribute("type")).toBe("password");
+});
+
+it("直连配对码字段标签关联且保持可见，便于核对粘贴内容", () => {
+  renderRemoteConnectionFields("zh-CN", { kind: "server" });
+  const input = screen.getByLabelText("配对码") as HTMLInputElement;
+  expect(input.getAttribute("type")).not.toBe("password");
+  expect(input.value).toBe("");
+  expect(screen.getByText(/zcode serve pair/)).toBeTruthy();
 });
 
 it("Docker 容器列表可从搜索框使用方向键与回车选择", async () => {

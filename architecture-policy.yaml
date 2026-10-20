@@ -861,3 +861,12 @@ exceptions:
       - apps/zcode-cli/packages/adapters/src/model/endpoint-routing-edition/index.ts
       - apps/zcode-cli/packages/adapters/src/model/provider-endpoint-routing-options.ts
     reason: Existing upstream routing assembly files gain the endpoint origin and injected JWT reader; adopting the full CLI model adapter directory needs a separate module boundary refactor.
+  - id: lan-direct-kind-presentation-existing-edit
+    rule: unmanaged-new-file
+    paths:
+      - packages/ui/src/lib/remoteConnectionPresentation.ts
+      - packages/ui/src/lib/remoteConnectionPresentationErrors.ts
+      - packages/ui/src/lib/remoteConnectionPresentationTypes.ts
+      - packages/ui/src/remote-connection/RemoteConnectionSelection.tsx
+      - packages/ui/src/WorkspaceSidebar/RemoteProjectConnectionDetails.tsx
+    reason: 已准入的连接展示投影公开接缝与选择屏存量文件，为局域网直连产品化补第四种连接类型的展示、错误分类与 i18n kind 名；展示模型仍为纯函数、不新增状态所有者，接管 lib/remote-connection/WorkspaceSidebar 目录不在本次范围内（规格见 docs/remote/lan-direct-connection.md）。

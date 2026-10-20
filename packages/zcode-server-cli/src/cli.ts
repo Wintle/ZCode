@@ -13,13 +13,24 @@ import {
   controlRequestSchema,
   createStoppedServerStatus,
   serverStatusSchema,
+  SERVER_LISTEN_HOST_ENV,
+  SERVER_LISTEN_PORT_ENV,
   type ServerStatus,
 } from "./contracts.js";
-import { requestControl } from "./ipc/controlClient.js";
+import {
+  isControlEndpointUnavailable,
+  requestControl,
+  runServePairCommand,
+  runServeTokensCommand,
+} from "./ipc/controlClient.js";
 import {
   resolveCanonicalServerLayout,
+  resolveListenTarget,
   resolveServerLayout,
   validateUninstallTarget,
+  writeServerConfig,
+  readServerConfig,
+  type ResolvedListenTarget,
 } from "./runtime/paths.js";
 import { validateServerInstallOwnership } from "./runtime/installationOwnership.js";
 import { createReleaseAgentWiring, type BundledAgentWiring } from "./runtime/agentWiring.js";
@@ -253,6 +264,73 @@ function parseServerCliArguments(argv: readonly string[]): {
   };
 }
 
+interface ServeListenPlan {
+  /** CLI 显式给出的监听参数（env 层，优先级最高）。 */
+  cli: { host?: string; port?: number };
+  effective: ResolvedListenTarget;
+  /** 注入服务 descriptor 的生效监听参数；配置与 CLI 都未给监听项时为空（保持默认 descriptor）。 */
+  descriptorArgs: string[];
+}
+
+function parseServeListenArgs(args: readonly string[]): { host?: string; port?: number } {
+  const readValue = (
+    name: string,
+    inline: string | undefined,
+    next: string | undefined,
+  ): string => {
+    const value = inline !== undefined ? inline : next;
+    if (value === undefined || value.startsWith("--")) throw new Error(`${name} requires a value`);
+    return value.trim();
+  };
+  let host: string | undefined;
+  let port: number | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] ?? "";
+    if (arg === "--host" || arg.startsWith("--host=")) {
+      const inline = arg.startsWith("--host=") ? arg.slice("--host=".length) : undefined;
+      const value = readValue("--host", inline, args[index + 1]);
+      if (!value) throw new Error("--host requires a non-empty value");
+      if (host !== undefined) throw new Error("--host may only be specified once");
+      host = value;
+      if (inline === undefined) index++;
+    } else if (arg === "--port" || arg.startsWith("--port=")) {
+      const inline = arg.startsWith("--port=") ? arg.slice("--port=".length) : undefined;
+      const value = readValue("--port", inline, args[index + 1]);
+      if (!/^\d+$/u.test(value) || Number(value) > 65_535) {
+        throw new Error(`--port must be an integer between 0 and 65535, got ${value}`);
+      }
+      if (port !== undefined) throw new Error("--port may only be specified once");
+      port = Number(value);
+      if (inline === undefined) index++;
+    }
+  }
+  return {
+    ...(host !== undefined ? { host } : {}),
+    ...(port !== undefined ? { port } : {}),
+  };
+}
+
+/** 解析生效监听：CLI > <serverRoot>/server-config.json > 默认；非回环缺端口在此 fail-fast。 */
+async function resolveServeListenPlan(
+  args: readonly string[],
+  layout: ReturnType<typeof resolveServerLayout>,
+): Promise<ServeListenPlan> {
+  const cli = parseServeListenArgs(args);
+  const config = await readServerConfig(layout);
+  const effective = resolveListenTarget(cli, config);
+  const explicit =
+    cli.host !== undefined ||
+    cli.port !== undefined ||
+    config?.listen?.host !== undefined ||
+    config?.listen?.port !== undefined;
+  const descriptorArgs: string[] = [];
+  if (explicit) {
+    descriptorArgs.push("--host", effective.host);
+    if (effective.port !== undefined) descriptorArgs.push("--port", String(effective.port));
+  }
+  return { cli, effective, descriptorArgs };
+}
+
 async function runServe(
   args: readonly string[],
   io: CliIO,
@@ -260,6 +338,23 @@ async function runServe(
   layout: ReturnType<typeof resolveServerLayout>,
   runtimeOptions: ServerCliRuntimeOptions,
 ): Promise<number> {
+  // `zcode serve pair` / `zcode serve tokens`：管理命令先分发，不进入 serve 生命周期。
+  if (args[0] === "pair") return await runServePairCommand(io, json, layout);
+  if (args[0] === "tokens") return await runServeTokensCommand(args.slice(1), io, json, layout);
+  const listenPlan = await resolveServeListenPlan(args, layout);
+  if (
+    (listenPlan.cli.host !== undefined || listenPlan.cli.port !== undefined) &&
+    !isRegisteredServiceEntry(args)
+  ) {
+    // 规格：serve 显式传 --host/--port 时把生效监听持久化到 server-config.json（随服务保留）。
+    // `--service-entry` 启动不回写：descriptor 里的旧参数不能覆盖用户手工编辑的配置。
+    await writeServerConfig(layout, {
+      listen: {
+        host: listenPlan.effective.host,
+        ...(listenPlan.effective.port !== undefined ? { port: listenPlan.effective.port } : {}),
+      },
+    });
+  }
   const daemonRequested = args.includes("--daemon");
   const supervisorProcess = args.includes("--supervisor");
   if (shouldRegisterService(daemonRequested, supervisorProcess)) {
@@ -314,7 +409,11 @@ async function runServe(
         command: process.execPath,
         entry: process.argv[1] ?? fileURLToPath(import.meta.url),
       });
-      const descriptor = createDaemonServiceDescriptor({ platform, layout });
+      const descriptor = createDaemonServiceDescriptor({
+        platform,
+        layout,
+        listenArgs: listenPlan.descriptorArgs,
+      });
       await mkdir(layout.serviceDir, { recursive: true, mode: 0o700 });
       const descriptorPath = serviceDescriptorPath(layout, descriptor);
       await writeFile(descriptorPath, descriptor.content, "utf8");
@@ -405,6 +504,14 @@ async function runServe(
           execPath: runtimeNode,
           env: {
             ...inheritedEnv,
+            // 监听参数经 env 传给 Core（env 层 = 链路里的 CLI 层）；未显式给出则不注入，
+            // Core 回落读 server-config.json。
+            ...(listenPlan.cli.host !== undefined
+              ? { [SERVER_LISTEN_HOST_ENV]: listenPlan.cli.host }
+              : {}),
+            ...(listenPlan.cli.port !== undefined
+              ? { [SERVER_LISTEN_PORT_ENV]: String(listenPlan.cli.port) }
+              : {}),
             ...releaseWiring,
             ...(runtimeRoot ? { ZCODE_SERVER_RUNTIME_ROOT: runtimeRoot } : {}),
             ...(release?.releaseId ? { ZCODE_SERVER_RELEASE_ID: release.releaseId } : {}),
@@ -521,11 +628,6 @@ async function runControl(
   if (json) stdout(io, result);
   else stdout(io, result ?? "ok");
   return 0;
-}
-
-function isControlEndpointUnavailable(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("code" in error)) return false;
-  return error.code === "ENOENT" || error.code === "ECONNREFUSED" || error.code === "EINVAL";
 }
 
 async function runUninstall(

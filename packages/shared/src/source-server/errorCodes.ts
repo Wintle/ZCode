@@ -1,20 +1,21 @@
 import { z } from "zod";
 
-export const SOURCE_SERVER_INSTALL_REQUIRED_ERROR_CODE =
-  "source-server-install-required" as const;
-export const SOURCE_SERVER_UPGRADE_REQUIRED_ERROR_CODE =
-  "source-server-upgrade-required" as const;
+export const SOURCE_SERVER_INSTALL_REQUIRED_ERROR_CODE = "source-server-install-required" as const;
+export const SOURCE_SERVER_UPGRADE_REQUIRED_ERROR_CODE = "source-server-upgrade-required" as const;
 export const SOURCE_SERVER_UPDATE_RUNNING_TASKS_ERROR_CODE =
   "source-server-update-running-tasks" as const;
 export const WORKSPACE_TASK_IDENTITY_CONFLICT_ERROR_CODE =
   "workspace-task-identity-conflict" as const;
-export const WORKSPACE_CONFIG_FILE_CONFLICT_ERROR_CODE =
-  "workspace-config-file-conflict" as const;
+export const WORKSPACE_CONFIG_FILE_CONFLICT_ERROR_CODE = "workspace-config-file-conflict" as const;
 export const WORKSPACE_MIGRATION_PLAN_DIVERGED_ERROR_CODE =
   "workspace-migration-plan-diverged" as const;
 export const WORKSPACE_SESSION_GENERATION_CHANGED_ERROR_CODE =
   "workspace-session-generation-changed" as const;
 export const REMOTE_BIND_CANCELED_ERROR_CODE = "remote-bind-canceled" as const;
+/** 局域网直连（LAN direct）公开错误码；wire body code 的映射见 connectionErrors.ts。 */
+export const REMOTE_PAIRING_CODE_INVALID_ERROR_CODE = "remote-pairing-code-invalid" as const;
+export const REMOTE_DEVICE_REVOKED_ERROR_CODE = "remote-device-revoked" as const;
+export const REMOTE_AUTH_REQUIRED_ERROR_CODE = "remote-auth-required" as const;
 export const REMOTE_WORKSPACE_BIND_SESSION_MISSING_ERROR_CODE =
   "remote-workspace-bind-session-missing" as const;
 export const REMOTE_WORKSPACE_DIRECTORY_UNAVAILABLE_ERROR_CODE =
@@ -44,6 +45,9 @@ export const PUBLIC_ZCODE_ERROR_CODES = [
   "remote-permission-denied",
   "remote-connection-canceled",
   "remote-connection-unknown",
+  REMOTE_PAIRING_CODE_INVALID_ERROR_CODE,
+  REMOTE_DEVICE_REVOKED_ERROR_CODE,
+  REMOTE_AUTH_REQUIRED_ERROR_CODE,
   SOURCE_SERVER_INSTALL_REQUIRED_ERROR_CODE,
   SOURCE_SERVER_UPGRADE_REQUIRED_ERROR_CODE,
   SOURCE_SERVER_UPDATE_RUNNING_TASKS_ERROR_CODE,
@@ -67,8 +71,6 @@ export const publicZCodeErrorCodeSchema = z.enum(PUBLIC_ZCODE_ERROR_CODES);
 
 const publicZCodeErrorCodeSet = new Set<string>(PUBLIC_ZCODE_ERROR_CODES);
 
-export function isPublicZCodeErrorCode(
-  value: unknown,
-): value is PublicZCodeErrorCode {
+export function isPublicZCodeErrorCode(value: unknown): value is PublicZCodeErrorCode {
   return typeof value === "string" && publicZCodeErrorCodeSet.has(value);
 }

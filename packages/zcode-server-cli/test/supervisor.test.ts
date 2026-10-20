@@ -21,6 +21,9 @@ class FakeCore extends EventEmitter {
   public exitOnKill = true;
   /** 模拟 SIGKILL 已发出但 OS 回收延迟（如 Rosetta/swap 下的不可中断等待）。 */
   public killExitDelayMs: number | undefined;
+  /** Supervisor 转发的管理命令记录与可配置应答（pair / list-devices / revoke-devices）。 */
+  public managementResult: unknown = {};
+  public readonly managementCommands: Array<Record<string, unknown>> = [];
 
   public send(message: unknown): boolean {
     if (
@@ -31,6 +34,19 @@ class FakeCore extends EventEmitter {
     ) {
       this.shutdownRequested = true;
       if (this.exitOnShutdown) queueMicrotask(() => this.emit("exit", 0, null));
+      return true;
+    }
+    if (typeof message === "object" && message !== null && "command" in message) {
+      this.managementCommands.push(message as Record<string, unknown>);
+      const id = (message as { id?: unknown }).id;
+      queueMicrotask(() =>
+        this.emit("message", {
+          type: "command-result",
+          id,
+          ok: true,
+          result: this.managementResult,
+        }),
+      );
     }
     return true;
   }
@@ -43,7 +59,12 @@ class FakeCore extends EventEmitter {
     return true;
   }
 
-  public reportReady(generation: number, version = "test", releaseId?: string): void {
+  public reportReady(
+    generation: number,
+    version = "test",
+    releaseId?: string,
+    extra?: Record<string, unknown>,
+  ): void {
     queueMicrotask(() =>
       this.emit("message", {
         type: "ready",
@@ -52,6 +73,7 @@ class FakeCore extends EventEmitter {
         version,
         ...(releaseId ? { releaseId } : {}),
         generation,
+        ...extra,
       }),
     );
   }
@@ -973,5 +995,117 @@ describe("Supervisor lifecycle", () => {
 
     vi.useRealTimers();
     await supervisor.stop();
+  });
+
+  it("forwards pair and token management commands to the Core over the existing IPC channel", async () => {
+    const root = await mkdtemp(join(tmpdir(), "zcode-lan-supervisor-"));
+    const layout = resolveServerLayout(join(root, "server"));
+    const core = new FakeCore();
+    const supervisor = new Supervisor({
+      layout,
+      launcher: {
+        launch: (generation) => {
+          core.reportReady(generation);
+          return core as unknown as ChildProcess;
+        },
+      },
+      version: "test",
+    });
+    await supervisor.start();
+    await waitForState(supervisor, "ready");
+
+    const pairResult = {
+      code: "0123456789abcdef",
+      expiresAt: 1_700_000_000_000,
+      host: "127.0.0.1",
+      port: 43123,
+    };
+    core.managementResult = pairResult;
+    await expect(requestControl(layout.controlEndpoint, { command: "pair" })).resolves.toEqual(
+      pairResult,
+    );
+    expect(core.managementCommands).toEqual([{ command: "pair", id: expect.any(String) }]);
+
+    core.managementResult = { revoked: ["d1"] };
+    await expect(
+      requestControl(layout.controlEndpoint, { command: "revoke-devices", deviceId: "d1" }),
+    ).resolves.toEqual({ revoked: ["d1"] });
+    core.managementResult = { revoked: ["d1", "d2"] };
+    await expect(
+      requestControl(layout.controlEndpoint, { command: "revoke-devices", all: true }),
+    ).resolves.toEqual({ revoked: ["d1", "d2"] });
+
+    // revoke 范围校验在 Supervisor 侧完成，不消耗一次 Core 转发。
+    const forwarded = core.managementCommands.length;
+    await expect(
+      requestControl(layout.controlEndpoint, { command: "revoke-devices" }),
+    ).rejects.toMatchObject({ code: "invalid-revoke-scope", retryable: false });
+    await expect(
+      requestControl(layout.controlEndpoint, {
+        command: "revoke-devices",
+        deviceId: "d1",
+        all: true,
+      }),
+    ).rejects.toMatchObject({ code: "invalid-revoke-scope" });
+    expect(core.managementCommands).toHaveLength(forwarded);
+
+    // Core 离开 ready 后结构化报 core-not-ready，而不是悬挂到客户端超时。
+    core.emit("exit", 1, null);
+    expect(supervisor.status().state).toBe("crashed");
+    await expect(requestControl(layout.controlEndpoint, { command: "pair" })).rejects.toMatchObject(
+      { code: "core-not-ready", retryable: true },
+    );
+    await supervisor.stop();
+  });
+
+  it("publishes listen and pairing status fields and warns once for non-loopback listeners", async () => {
+    const root = await mkdtemp(join(tmpdir(), "zcode-lan-status-"));
+    const layout = resolveServerLayout(join(root, "server"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const core = new FakeCore();
+      const supervisor = new Supervisor({
+        layout,
+        launcher: {
+          launch: (generation) => {
+            core.reportReady(generation, "test", undefined, {
+              listenHost: "192.168.1.5",
+              listenPort: 8737,
+              pairingReady: true,
+              pairedDeviceCount: 2,
+            });
+            return core as unknown as ChildProcess;
+          },
+        },
+        version: "test",
+      });
+      await supervisor.start();
+      await waitForState(supervisor, "ready");
+
+      expect(supervisor.status()).toMatchObject({
+        listenHost: "192.168.1.5",
+        listenPort: 8737,
+        pairingReady: true,
+      });
+      const warnings = warnSpy.mock.calls.filter((call) =>
+        JSON.stringify(call).includes("non-loopback listener active"),
+      );
+      expect(warnings).toHaveLength(1);
+      expect(JSON.stringify(warnings)).toContain('"pairedDeviceCount":2');
+
+      // listen 字段进入持久化 status，供 status --json 读取。
+      await vi.waitFor(async () => {
+        expect((await readPersistedStatus(layout))?.listenHost).toBe("192.168.1.5");
+      });
+
+      await supervisor.stop();
+      expect(supervisor.status()).toMatchObject({
+        listenHost: null,
+        listenPort: null,
+        pairingReady: false,
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

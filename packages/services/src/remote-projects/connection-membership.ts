@@ -63,15 +63,51 @@ export async function prepareRemoteServerConnection(input: {
   const { tokenCredentialKey: key, ...connectionTarget } = host.target;
   const token = key ? await input.credentials.load(key) : undefined;
   if (key && !token) throw new Error("remote-project.credential-unavailable");
+  const pairingCode = input.target.pairingCode?.trim();
   return {
-    target: { ...connectionTarget, ...(token ? { token } : {}) },
-    async commit(sourceServerId: string) {
+    // 连接目标是内存态：保留本次请求的配对码供握手消费；saveHost 已按脱敏快照落库。
+    target: {
+      ...connectionTarget,
+      ...(token ? { token } : {}),
+      ...(pairingCode ? { pairingCode } : {}),
+    },
+    /**
+     * 配对换回的设备 Token 只有这一个写入点，与手工输入 token 共用同一
+     * `remote-server:<hostId>:token` key 与快照 tokenCredentialKey 字段；
+     * 一次性配对码消费后必须立刻固化键名，握手失败后的重连才能找回凭据。
+     */
+    async persistDeviceToken(deviceToken: string) {
+      const pairingToken = deviceToken.trim();
+      if (!pairingToken) throw new Error("remote-project.invalid-pairing-token");
+      const current = (await input.service.readDirectory()).hosts.find(
+        (item) => item.id === host.id,
+      );
+      if (!current || current.target?.kind !== "server")
+        throw new Error("remote-project.host-removed");
+      const credentialKey = key ?? `remote-server:${id}:token`;
+      await input.credentials.save(credentialKey, pairingToken);
+      if (!current.target.tokenCredentialKey) {
+        await input.service.saveHost({
+          id: current.id,
+          target: { ...current.target, tokenCredentialKey: credentialKey },
+        });
+      }
+    },
+    async commit(sourceServerId: string, facts?: { name?: string }) {
       const bound = await input.service.bindHost({
         id: host.id,
         membershipId: host.membershipId,
         resolvedId: remoteProjectHostIdForTarget(connectionTarget, sourceServerId),
       });
       if (!bound) throw new Error("remote-project.host-removed");
+      // 设备名默认取 server-info（name，其次 hostname）；只补快照缺省，不覆盖用户命名。
+      const defaultName = facts?.name?.trim();
+      if (defaultName && bound.target?.kind === "server" && !bound.target.name) {
+        await input.service.saveHost({
+          id: bound.id,
+          target: { ...bound.target, name: defaultName },
+        });
+      }
     },
   };
 }

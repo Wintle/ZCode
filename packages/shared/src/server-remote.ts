@@ -91,3 +91,13 @@ export const serverRemoteHostCapabilitySchema = z
   .strict();
 
 export type ServerRemoteHostCapability = z.infer<typeof serverRemoteHostCapabilitySchema>;
+
+/** POST /api/pair 成功响应（200）；失败响应体见 connectionErrors 的分类入口。 */
+export const serverRemotePairResponseSchema = z
+  .object({
+    deviceToken: z.string().trim().min(1),
+    serverId: z.string().trim().min(1),
+  })
+  .strict();
+
+export type ServerRemotePairResponse = z.infer<typeof serverRemotePairResponseSchema>;

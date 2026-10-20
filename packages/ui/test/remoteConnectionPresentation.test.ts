@@ -140,6 +140,9 @@ it.each([
   ["remote-permission-denied", "permissionDenied", "details"],
   ["remote-connection-canceled", "connectionCanceled", "connect"],
   ["remote-connection-unknown", "unknown", "retry"],
+  ["remote-pairing-code-invalid", "pairingCodeInvalid", "pairing-retry"],
+  ["remote-device-revoked", "deviceRevoked", "re-pair"],
+  ["remote-auth-required", "authRequired", "re-pair"],
 ] as const)("错误 %s 给出原因与操作", (errorCode, title, primaryAction) => {
   expect(classifyRemoteConnectionError({ errorCode })).toMatchObject({
     titleId: `remote.error.${title}`,
@@ -187,3 +190,20 @@ it("项目级失败保留 owner 已分类的原因，不被设备在线或未知
   expect(presentation.status).toBe("failed");
   expect(presentation.reasonText).toBe("远程目录不可用，请检查目录是否存在。");
 });
+
+it.each(["remote-device-revoked", "remote-auth-required"] as const)(
+  "%s 投影为需要处理 · 重新配对，不落入未知",
+  (errorCode) => {
+    const presentation = resolveRemoteConnectionPresentation({
+      state: "failed",
+      errorCode,
+    });
+    expect(presentation).toMatchObject({
+      status: "pending",
+      shortMessageId: "remote.status.needsPairing",
+      tone: "warning",
+      primaryAction: "re-pair",
+    });
+    expect(classifyRemoteConnectionError({ errorCode }).category).not.toBe("unrecognized");
+  },
+);

@@ -33,6 +33,8 @@ export interface ServerConnectOptions {
   name?: string;
   /** 临时连接凭据；持久化时必须转成 credential key。 */
   token?: string;
+  /** 首次/重新配对的一次性配对码；只允许存在于连接流程内存态，不落盘。 */
+  pairingCode?: string;
   /** 服务端默认工作区路径，可被连接流程中的 workspacePath 覆盖。 */
   workspacePath?: string;
   /** 远端服务实例稳定标识，用于 workspaceIdentity authority。 */
@@ -57,7 +59,8 @@ export function stripRemoteTargetSecrets(target: RemoteTarget): RemoteTarget {
   }
 
   if (target.kind === "server") {
-    const { token: _token, ...sanitized } = target;
+    // 配对码与 token 同属只应存在于当前连接流程的 secret，持久化前一并剥除。
+    const { token: _token, pairingCode: _pairingCode, ...sanitized } = target;
     return sanitized;
   }
 

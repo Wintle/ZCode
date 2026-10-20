@@ -29,6 +29,7 @@ import { type RemoteTarget } from "@zcode/shared";
 import { TID_SSH_ERROR } from "@zcode/shared/test-ids";
 import { cn } from "@/components/lib/utils.js";
 import { Button } from "@/components/ui/button.js";
+import { Input } from "@/components/ui/input.js";
 import type { RemoteConnectionLogEntry } from "@/hooks/useRemoteConnectionLogs.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useFeedbackStore } from "@/feedback/feedbackStore.js";
@@ -47,6 +48,14 @@ const REMOTE_CONNECTION_PHASES = [
   ["identify", "remote.phase.identify"],
   ["deploy", "remote.phase.deploy"],
   ["handshake", "remote.phase.handshake"],
+] as const;
+
+/** 直连的四阶段：建立直连通道 → 验证配对码 → 识别设备 → 启动连接（直连规格）。 */
+const SERVER_REMOTE_CONNECTION_PHASES = [
+  ["channel", "remote.phase.channel.server"],
+  ["verify", "remote.phase.verify"],
+  ["identify", "remote.phase.identify"],
+  ["handshake", "remote.phase.handshake.server"],
 ] as const;
 
 export type RemoteConnectionPhaseStatus = "pending" | "active" | "complete" | "failed";
@@ -74,16 +83,17 @@ function normalizeRemoteConnectionPhase(rawPhase: string): string | null {
 
 export function resolveRemoteConnectionPhases(
   logs: ReadonlyArray<Pick<RemoteConnectionLogEntry, "message" | "level">>,
-  options: { connectionReady?: boolean } = {},
+  options: { connectionReady?: boolean; kind?: RemoteTarget["kind"] } = {},
 ) {
+  const phaseDefs =
+    options.kind === "server" ? SERVER_REMOTE_CONNECTION_PHASES : REMOTE_CONNECTION_PHASES;
   let activeIndex = -1;
   let failedIndex = -1;
   for (const log of logs) {
     const match = /^\[source-server:([^\]]+)\]/u.exec(log.message);
     if (!match) continue;
-    const phaseIndex = REMOTE_CONNECTION_PHASES.findIndex(
-      ([key]) => key === normalizeRemoteConnectionPhase(match[1]!),
-    );
+    const normalized = normalizeRemoteConnectionPhase(match[1]!);
+    const phaseIndex = phaseDefs.findIndex(([key]) => key === normalized);
     if (phaseIndex < 0) continue;
     activeIndex = Math.max(activeIndex, phaseIndex);
     if (log.level === "error") failedIndex = phaseIndex;
@@ -95,7 +105,7 @@ export function resolveRemoteConnectionPhases(
     (options.connectionReady === true ||
       logs.some((log) => log.message.startsWith("[source-server:publish-online]"))) &&
     failedIndex < 0;
-  return REMOTE_CONNECTION_PHASES.map(([key, titleId], index) => ({
+  return phaseDefs.map(([key, titleId], index) => ({
     key,
     titleId,
     status: (failedIndex === index
@@ -167,12 +177,13 @@ export function resolveRemoteConnectionPhaseSub(
     case "channel":
       return phase.status === "complete"
         ? {
-            id:
-              context.kind && context.kind !== "server"
-                ? `remote.phaseSub.channelEstablished.${context.kind}`
-                : "remote.phaseSub.channelEstablished",
+            id: context.kind
+              ? `remote.phaseSub.channelEstablished.${context.kind}`
+              : "remote.phaseSub.channelEstablished",
           }
         : null;
+    case "verify":
+      return phase.status === "complete" ? { id: "remote.phaseSub.pairingVerified" } : null;
     case "identify":
       if (context.recognizedDeviceName) {
         return {
@@ -240,6 +251,7 @@ export function RemoteConnectionConnectingStep({
   cancelled = false,
   onCancelConnection,
   credentials,
+  pairingRetry,
   forceUpdate,
   onMinimize,
   onClose,
@@ -249,6 +261,15 @@ export function RemoteConnectionConnectingStep({
   forceUpdate?: { tasks?: SourceServerRunningTask[]; onConfirm: () => void; onCancel: () => void };
   credentials?: {
     passphrase: boolean;
+    value: string;
+    onChange: (value: string) => void;
+    onSubmit: () => void;
+  };
+  /**
+   * 直连配对失败的就地重试等待点：配对码错误/吊销/需鉴权时由 flow owner 注入，
+   * 在配对阶段内改码重提交，不回退整张表单（直连规格）。
+   */
+  pairingRetry?: {
     value: string;
     onChange: (value: string) => void;
     onSubmit: () => void;
@@ -288,6 +309,7 @@ export function RemoteConnectionConnectingStep({
 }) {
   const { intl } = useZCodeIntl();
   const credentialInputId = useId();
+  const pairingInputId = useId();
   const platform = usePlatform();
   const openFeedbackSubmit = useFeedbackStore((state) => state.openSubmit);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
@@ -301,12 +323,16 @@ export function RemoteConnectionConnectingStep({
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [loading]);
+  // 直连配对失败时把等待点钉在配对阶段，交互与「补充凭据」等待点同构（直连规格）。
+  const serverPairingWait = kind === "server" && pairingRetry != null;
   const waitingPhase = credentials
     ? "channel"
-    : installConfirmation || forceUpdate
-      ? "deploy"
-      : undefined;
-  const phases = resolveRemoteConnectionPhases(logs, { connectionReady }).map(
+    : serverPairingWait
+      ? "verify"
+      : installConfirmation || forceUpdate
+        ? "deploy"
+        : undefined;
+  const phases = resolveRemoteConnectionPhases(logs, { connectionReady, kind }).map(
     (phase, index, all) => {
       const waitingIndex = all.findIndex((item) => item.key === waitingPhase);
       if (waitingIndex >= 0)
@@ -550,8 +576,37 @@ export function RemoteConnectionConnectingStep({
             </Button>
           </form>
         ) : null}
+        {pairingRetry ? (
+          <form
+            className="space-y-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              pairingRetry.onSubmit();
+            }}
+          >
+            <label htmlFor={pairingInputId} className="block text-ui-sm">
+              {intl.formatMessage({ id: "server.pairingCode" })}
+            </label>
+            <Input
+              id={pairingInputId}
+              autoFocus
+              required
+              className="mt-1 font-mono"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder={intl.formatMessage({ id: "server.pairingCodePlaceholder" })}
+              data-testid="server-pairing-retry-input"
+              value={pairingRetry.value}
+              onChange={(event) => pairingRetry.onChange(event.target.value)}
+            />
+            <Button type="submit" size="sm" disabled={loading || !pairingRetry.value.trim()}>
+              {intl.formatMessage({ id: errorPresentation.actionMessageId })}
+            </Button>
+          </form>
+        ) : null}
         <div className="flex flex-wrap gap-2 pt-1">
-          {!credentials ? (
+          {!credentials && !pairingRetry ? (
             <Button
               type="button"
               size="sm"
@@ -601,11 +656,13 @@ export function RemoteConnectionConnectingStep({
     ) : null;
   const errorPhase = credentials
     ? "channel"
-    : errorCode === "source-server-identity-change-pending"
-      ? "identify"
-      : (phases.find((phase) => phase.status === "failed")?.key ??
-        phases.find((phase) => phase.status === "active")?.key ??
-        "channel");
+    : serverPairingWait
+      ? "verify"
+      : errorCode === "source-server-identity-change-pending"
+        ? "identify"
+        : (phases.find((phase) => phase.status === "failed")?.key ??
+          phases.find((phase) => phase.status === "active")?.key ??
+          "channel");
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-6 ">
       <div className="flex flex-col flex-1 min-h-0 space-y-4 overflow-y-auto">
@@ -618,11 +675,7 @@ export function RemoteConnectionConnectingStep({
                   ? formatRemoteLinkRailDevice(target)
                   : intl.formatMessage({ id: "remote.phase.channel" }))}
             </h3>
-            {kind === "server" ? (
-              <span className="text-ui-xs">Server</span>
-            ) : (
-              <RemoteConnectionKindTag kind={kind} />
-            )}
+            <RemoteConnectionKindTag kind={kind} />
             {cancelled ? null : <RemoteConnectionStatusTag presentation={presentation} />}
           </div>
           {target ? (

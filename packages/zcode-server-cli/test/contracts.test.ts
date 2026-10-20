@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  authErrorSchema,
   controlRequestSchema,
   controlResponseSchema,
+  coreCommandSchema,
+  coreMessageSchema,
+  deviceListResultSchema,
+  pairErrorSchema,
+  pairRequestSchema,
+  pairSuccessSchema,
   releaseCatalogSchema,
   releaseManifestSchema,
+  revokeDevicesResultSchema,
   runtimeIdentitySchema,
   serverStatusSchema,
+  servePairResultSchema,
   createStoppedServerStatus,
 } from "../src/contracts.js";
 
@@ -108,5 +117,153 @@ describe("R2 control contract", () => {
       }),
     );
     expect(serverStatusSchema.parse(status)).toEqual(status);
+  });
+});
+
+describe("LAN direct connection contracts (P1)", () => {
+  const legacyStatus = {
+    state: "ready",
+    pid: 42,
+    port: 38123,
+    host: "127.0.0.1",
+    version: "3.8.0",
+    generation: 1,
+    serviceRegistered: false,
+    runningTaskCount: 0,
+    crashBudget: { windowStartedAt: 1, crashCount: 0, nextRestartDelayMs: 0, exhausted: false },
+    updatedAt: 2,
+  };
+
+  it("keeps old status.json readable and fills listen/pairing defaults", () => {
+    const parsed = serverStatusSchema.parse(legacyStatus);
+    expect(parsed.listenHost).toBeNull();
+    expect(parsed.listenPort).toBeNull();
+    expect(parsed.pairingReady).toBe(false);
+
+    const listening = serverStatusSchema.parse({
+      ...legacyStatus,
+      listenHost: "192.168.1.5",
+      listenPort: 8737,
+      pairingReady: true,
+    });
+    expect(listening).toMatchObject({
+      listenHost: "192.168.1.5",
+      listenPort: 8737,
+      pairingReady: true,
+    });
+    // 未知字段仍然拒绝（strict 契约不放松）。
+    expect(serverStatusSchema.safeParse({ ...legacyStatus, extra: 1 }).success).toBe(false);
+    // stopped 快照也携带可选字段，保证 --json 输出结构稳定。
+    expect(createStoppedServerStatus("3.8.0")).toMatchObject({
+      listenHost: null,
+      listenPort: null,
+      pairingReady: false,
+    });
+  });
+
+  it("accepts the LAN management control commands and Core command-result round-trip", () => {
+    expect(controlRequestSchema.safeParse({ id: "1", command: "pair" }).success).toBe(true);
+    expect(controlRequestSchema.safeParse({ id: "1", command: "list-devices" }).success).toBe(true);
+    expect(
+      controlRequestSchema.safeParse({
+        id: "1",
+        command: "revoke-devices",
+        deviceId: "d1",
+      }).success,
+    ).toBe(true);
+    expect(
+      controlRequestSchema.safeParse({ id: "1", command: "revoke-devices", all: true }).success,
+    ).toBe(true);
+
+    expect(coreCommandSchema.safeParse({ command: "shutdown" }).success).toBe(true);
+    expect(coreCommandSchema.safeParse({ command: "pair", id: "c1" }).success).toBe(true);
+    expect(coreCommandSchema.safeParse({ command: "list-devices", id: "c2" }).success).toBe(true);
+    expect(
+      coreCommandSchema.safeParse({ command: "revoke-devices", id: "c3", all: true }).success,
+    ).toBe(true);
+    expect(coreCommandSchema.safeParse({ command: "pair" }).success).toBe(false);
+
+    // 旧 Core 的 ready（无 listen 字段）与新 ready 都必须能解析。
+    expect(
+      coreMessageSchema.safeParse({
+        type: "ready",
+        host: "127.0.0.1",
+        port: 1,
+        version: "1",
+        generation: 1,
+      }).success,
+    ).toBe(true);
+    expect(
+      coreMessageSchema.safeParse({
+        type: "ready",
+        host: "127.0.0.1",
+        port: 1,
+        version: "1",
+        generation: 1,
+        listenHost: "0.0.0.0",
+        listenPort: 8737,
+        pairingReady: true,
+        pairedDeviceCount: 2,
+      }).success,
+    ).toBe(true);
+    expect(
+      coreMessageSchema.safeParse({
+        type: "command-result",
+        id: "c1",
+        ok: true,
+        result: { revoked: ["d1"] },
+      }).success,
+    ).toBe(true);
+    expect(
+      coreMessageSchema.safeParse({
+        type: "command-result",
+        id: "c1",
+        ok: false,
+        error: { code: "device-not-found", message: "nope" },
+      }).success,
+    ).toBe(true);
+    expect(
+      coreMessageSchema.safeParse({ type: "command-result", id: "c1", ok: false }).success,
+    ).toBe(true);
+  });
+
+  it("pins the /api/pair and auth 401 wire contracts", () => {
+    expect(pairRequestSchema.safeParse({ code: "0123456789abcdef" }).success).toBe(true);
+    expect(pairRequestSchema.safeParse({}).success).toBe(false);
+    expect(pairSuccessSchema.safeParse({ deviceToken: "t", serverId: "s" }).success).toBe(true);
+    expect(pairErrorSchema.safeParse({ error: "bad" }).success).toBe(true);
+    expect(pairErrorSchema.safeParse({ error: "bad", code: "pairing-code-invalid" }).success).toBe(
+      true,
+    );
+    expect(pairErrorSchema.safeParse({ error: "bad", code: "not-a-pairing-code" }).success).toBe(
+      false,
+    );
+    expect(authErrorSchema.safeParse({ error: "x", code: "auth-required" }).success).toBe(true);
+    expect(authErrorSchema.safeParse({ error: "x", code: "device-revoked" }).success).toBe(true);
+    expect(authErrorSchema.safeParse({ error: "x", code: "other" }).success).toBe(false);
+
+    expect(
+      servePairResultSchema.safeParse({
+        code: "0123456789abcdef",
+        expiresAt: 1,
+        host: "192.168.1.5",
+        port: 8737,
+      }).success,
+    ).toBe(true);
+    expect(
+      deviceListResultSchema.safeParse({
+        devices: [
+          {
+            id: "d1",
+            name: "laptop",
+            lastSeenAt: 1,
+            revokedAt: null,
+            status: "active",
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(revokeDevicesResultSchema.safeParse({ revoked: ["d1"] }).success).toBe(true);
+    expect(revokeDevicesResultSchema.safeParse({}).success).toBe(false);
   });
 });

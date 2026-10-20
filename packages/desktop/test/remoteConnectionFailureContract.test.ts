@@ -91,4 +91,24 @@ describe("连接失败的 Host/App 契约", () => {
       `remote-${phase}-failed`,
     );
   });
+  it.each([
+    ["remote-pairing-code-invalid", "Pairing code rejected"],
+    ["remote-device-revoked", "Device credential revoked"],
+    ["remote-auth-required", "Authentication required"],
+  ])("直连错误 %s 经 Host 契约原样返回且可判别为不重试", (code, message) => {
+    const failure = normalizeRemoteConnectionError(
+      Object.assign(new Error(message), { code, retryable: false }),
+    );
+    expect(failure).toMatchObject({ code, retryable: false, message });
+    expect(publicZCodeErrorCodeSchema.parse(failure.code)).toBe(code);
+    expect(
+      hostRemoteWorkspaceConnectFailedResponseSchema.safeParse({
+        type: "remote-workspace-connect-failed",
+        requestId: "direct",
+        error: failure.message,
+        reasonCode: failure.code,
+        retryable: failure.retryable,
+      }).success,
+    ).toBe(true);
+  });
 });

@@ -40,6 +40,7 @@ import {
   getRemoteWizardStepCopy,
   collectRemoteFormFieldErrors,
   formatRemoteDraftPreview,
+  parseServerRemoteAddress,
   withDefaultRemoteResourcePackages,
 } from "@/lib/remoteConnectionWizard.js";
 import {
@@ -233,9 +234,10 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
     wslUser,
     dockerContainer,
     manualDockerContainer,
-    serverUrl,
+    serverHost,
+    serverPort,
     serverName,
-    serverToken,
+    serverPairingCode,
     serverWorkspacePath,
     sshConfigAliases,
     sshConfigAliasesLoading,
@@ -258,9 +260,10 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
     setWslUser,
     setDockerContainer,
     setManualDockerContainer,
-    setServerUrl,
+    setServerHost,
+    setServerPort,
     setServerName,
-    setServerToken,
+    setServerPairingCode,
     setServerWorkspacePath,
     refreshDockerContainers,
     applySshConfigAlias,
@@ -1049,9 +1052,10 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
     wslUser,
     dockerContainer,
     manualDockerContainer,
-    serverUrl,
+    serverHost,
+    serverPort,
     serverName,
-    serverToken,
+    serverPairingCode,
     serverWorkspacePath,
   };
 
@@ -1291,9 +1295,12 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
       setDockerContainer(target.container);
       setManualDockerContainer(target.container);
     } else {
-      setServerUrl(target.url);
+      // 直连目标以 host/port 进入表单；历史目标可能仍带 url，解析回填而不是回显完整 URL。
+      const parsedServerAddress = parseServerRemoteAddress(target.url);
+      setServerHost(parsedServerAddress.host);
+      setServerPort(parsedServerAddress.port);
       setServerName(target.name ?? "");
-      setServerToken(target.token ?? "");
+      setServerPairingCode(target.pairingCode ?? "");
     }
     setCurrentStep("connecting");
     setErrorCode(initialFailure.code);
@@ -1385,7 +1392,7 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
             // 自动换目标不能混用常驻表单中上一设备的凭据，缺凭据只能重新输入。
             setPassword("");
             setPrivateKeyPassphrase("");
-            setServerToken("");
+            setServerPairingCode("");
             setHost(target.host);
             setPort(String(target.port ?? 22));
             setUsername(target.username);
@@ -1501,7 +1508,7 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
     // 只替换地址会把上一目标的密码/token 带进新请求；清理发生在换目标而非收起时。
     setPassword("");
     setPrivateKeyPassphrase("");
-    setServerToken("");
+    setServerPairingCode("");
     setKind(target.kind);
     updatePendingRemoteTarget(target);
     pendingCompletionIntentRef.current = {
@@ -1523,7 +1530,9 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
       setManualDockerContainer(target.container);
       setDockerContainer(target.container);
     } else {
-      setServerUrl(target.url);
+      const parsedServerAddress = parseServerRemoteAddress(target.url);
+      setServerHost(parsedServerAddress.host);
+      setServerPort(parsedServerAddress.port);
       setServerName(target.name ?? "");
     }
     if (!acceptInitialFailure(target, initialFailure)) setCurrentStep("settings");
@@ -1660,6 +1669,13 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
     aliasCredentialsPending ||
     credentialCategory === "credentials" ||
     credentialCategory === "authentication";
+  // 直连配对失败的就地等待点：吊销/需鉴权要重新配对，配对码错误要改码重试；
+  // 两者都复用连接流程的 requestId/epoch 机制重提交，不回退整张表单。
+  const needsPairingRetry =
+    pendingRemoteTarget?.kind === "server" &&
+    (credentialCategory === "pairing-code-invalid" ||
+      credentialCategory === "device-revoked" ||
+      credentialCategory === "auth-required");
   const passphraseRequired =
     pendingRemoteTarget?.kind === "ssh" && Boolean(pendingRemoteTarget.privateKeyPath);
   const currentConnectionState = sourceManagementSnapshot?.states.find(
@@ -1917,9 +1933,10 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
       wslDistros: wslDistros,
       dockerContainer: dockerContainer,
       manualDockerContainer: manualDockerContainer,
-      serverUrl: serverUrl,
+      serverHost: serverHost,
+      serverPort: serverPort,
       serverName: serverName,
-      serverToken: serverToken,
+      serverPairingCode: serverPairingCode,
       serverWorkspacePath: serverWorkspacePath,
       dockerContainers: dockerContainers,
       dockerAvailable: dockerAvailable,
@@ -1955,9 +1972,10 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
       onWslUserChange: setWslUser,
       onDockerContainerChange: setDockerContainer,
       onManualDockerContainerChange: setManualDockerContainer,
-      onServerUrlChange: setServerUrl,
+      onServerHostChange: setServerHost,
+      onServerPortChange: setServerPort,
       onServerNameChange: setServerName,
-      onServerTokenChange: setServerToken,
+      onServerPairingCodeChange: setServerPairingCode,
       onServerWorkspacePathChange: setServerWorkspacePath,
       onDockerContainersRefresh: refreshDockerContainers,
       onApplySshConfigAlias: applySshConfigAlias,
@@ -2006,6 +2024,28 @@ export function useRemoteConnectionFlow(options: RemoteConnectionFlowOptions) {
               };
               const intent = pendingCompletionIntentRef.current;
               setAliasCredentialsPending(false);
+              void startRemoteConnection(
+                target,
+                false,
+                intent.preferredDirectoryPath,
+                intent.options,
+              );
+            },
+          }
+        : undefined,
+      pairingRetry: needsPairingRetry
+        ? {
+            value: serverPairingCode,
+            onChange: setServerPairingCode,
+            onSubmit: () => {
+              if (pendingRemoteTarget?.kind !== "server") return;
+              const value = serverPairingCode.trim();
+              if (!value) return;
+              // 改码重试/重新配对复用同一条连接流程：新请求生成新的 requestId/epoch，
+              // 迟到的旧失败不能污染重提交。
+              const target = { ...pendingRemoteTarget, pairingCode: value };
+              const intent = pendingCompletionIntentRef.current;
+              updatePendingRemoteTarget(target);
               void startRemoteConnection(
                 target,
                 false,

@@ -2,16 +2,20 @@ import type { SourceServerRunningTask } from "@zcode/shared";
 /* oxlint-disable eslint(max-lines) -- Supervisor 集中维护生命周期、Core 代际和更新回滚状态机，启动恢复锁边界修复不应拆散其原子流程。 */
 
 import { type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { createServiceLogger } from "@zcode/services/node";
 import { SOURCE_SERVER_UPDATE_RUNNING_TASKS_ERROR_CODE } from "@zcode/shared";
 import {
+  CORE_COMMAND_TIMEOUT_MS,
   CORE_KILL_TIMEOUT_MS,
   CORE_READY_TIMEOUT_MS,
   CORE_STOP_GRACE_TIMEOUT_MS,
   coreMessageSchema,
+  isLoopbackHost,
   SERVER_CLI_PROTOCOL_VERSION,
   type ControlRequest,
+  type CoreCommand,
   type LifecycleState,
   type ReleaseManifest,
   type RuntimeIdentity,
@@ -65,10 +69,22 @@ export class Supervisor {
   private generation = 0;
   private host: string | null = null;
   private port: number | null = null;
+  private listenHost: string | null = null;
+  private listenPort: number | null = null;
+  private pairingReady = false;
   private startedAt: number | null = null;
   private runningTaskCount = 0;
   private runningTasks: SourceServerRunningTask[] | undefined;
   private lastExitReason: string | null = null;
+  /** Supervisor→Core 管理命令（pair/list-devices/revoke-devices）的在途请求。 */
+  private readonly pendingCoreCommands = new Map<
+    string,
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: unknown) => void;
+      timer: NodeJS.Timeout;
+    }
+  >();
   private readonly persistStatusSnapshot: () => Promise<void>;
   private lifecycleOperation:
     | { kind: LifecycleOperationKind; promise: Promise<unknown> }
@@ -206,6 +222,8 @@ export class Supervisor {
     if (!this.core) return;
     this.state = "stopping";
     this.lastExitReason = reason;
+    // Core 即将停止，迟到的 command-result 不会再有；先让在途管理命令失败，避免悬挂到超时。
+    this.rejectPendingCoreCommands("Server Core is stopping");
     log.info("stopping server core", { reason, pid: this.core.pid });
     const core = this.core;
     try {
@@ -368,6 +386,9 @@ export class Supervisor {
       runningTaskCount: this.runningTaskCount,
       crashBudget: this.crashBudget.snapshot(),
       updatedAt: Date.now(),
+      listenHost: this.listenHost,
+      listenPort: this.listenPort,
+      pairingReady: this.pairingReady,
     };
   }
 
@@ -396,6 +417,7 @@ export class Supervisor {
     const handleTerminal = (reason: string): void => {
       if (terminalObserved) return;
       terminalObserved = true;
+      this.rejectPendingCoreCommands(`Server Core exited (${reason})`);
       if (this.core !== child || this.state === "stopping" || this.state === "stopped") return;
       if (this.state === "stop-failed") {
         // stop 已失败时继续保留锁；迟到的终态只清除已死亡 child，不得计入 crash budget
@@ -467,6 +489,9 @@ export class Supervisor {
       this.state = "ready";
       this.host = message.host;
       this.port = message.port;
+      this.listenHost = message.listenHost ?? message.host;
+      this.listenPort = message.listenPort ?? message.port;
+      this.pairingReady = message.pairingReady ?? false;
       this.generation = message.generation;
       this.startedAt = Date.now();
       this.coreVersion = message.version;
@@ -476,6 +501,29 @@ export class Supervisor {
         port: this.port,
         generation: this.generation,
       });
+      if (this.listenHost && !isLoopbackHost(this.listenHost)) {
+        // 规格：非回环监听启动时输出一次告警（地址、端口、已配对设备数）。
+        log.warn("non-loopback listener active", {
+          listenHost: this.listenHost,
+          listenPort: this.listenPort,
+          pairedDeviceCount: message.pairedDeviceCount ?? 0,
+        });
+      }
+    } else if (message.type === "command-result") {
+      const pending = this.pendingCoreCommands.get(message.id);
+      if (pending) {
+        this.pendingCoreCommands.delete(message.id);
+        clearTimeout(pending.timer);
+        if (message.ok) pending.resolve(message.result);
+        else
+          pending.reject(
+            new ControlRequestError(
+              message.error?.code ?? "command-failed",
+              message.error?.message ?? "Server Core command failed",
+              false,
+            ),
+          );
+      }
     } else if (message.type === "heartbeat" || message.type === "task-activity") {
       this.runningTaskCount = message.runningTaskCount;
       this.runningTasks = message.runningTasks;
@@ -502,6 +550,9 @@ export class Supervisor {
   private clearCoreScopedStatus(): void {
     this.host = null;
     this.port = null;
+    this.listenHost = null;
+    this.listenPort = null;
+    this.pairingReady = false;
     this.startedAt = null;
     this.runningTaskCount = 0;
     this.runningTasks = undefined;
@@ -519,6 +570,12 @@ export class Supervisor {
         return this.runningTasks ?? null;
       case "runtime-identity":
         return this.runtimeIdentity();
+      case "pair":
+      case "list-devices":
+      case "revoke-devices":
+        // 局域网直连管理命令：经既有 control socket 收口，由 Supervisor 复用既有
+        // IPC 通道转发给运行中的 Core；不为 CLI 另起第二条管理通道。
+        return await this.forwardToCore(request);
       case "stop":
         this.startAcknowledgedLifecycleOperation("stop", () =>
           this.stopInternal("control request"),
@@ -559,6 +616,75 @@ export class Supervisor {
         log.info("uninstall confirmed, stopping server");
         this.startAcknowledgedLifecycleOperation("uninstall", () => this.stopInternal("uninstall"));
         return { uninstalled: true };
+    }
+  }
+
+  /** 将管理命令转发给运行中的 Core 并等待 command-result 应答。 */
+  private async forwardToCore(
+    request: Extract<ControlRequest, { command: "pair" | "list-devices" | "revoke-devices" }>,
+  ): Promise<unknown> {
+    const core = this.core;
+    if (!core || this.state !== "ready") {
+      return Promise.reject(
+        new ControlRequestError(
+          "core-not-ready",
+          "Server Core is not ready to handle this request",
+          true,
+        ),
+      );
+    }
+    if (
+      request.command === "revoke-devices" &&
+      Boolean(request.all) === Boolean(request.deviceId)
+    ) {
+      return Promise.reject(
+        new ControlRequestError(
+          "invalid-revoke-scope",
+          "revoke-devices requires exactly one of deviceId or all",
+          false,
+        ),
+      );
+    }
+    const id = randomUUID();
+    const command: CoreCommand =
+      request.command === "pair"
+        ? { command: "pair", id }
+        : request.command === "list-devices"
+          ? { command: "list-devices", id }
+          : {
+              command: "revoke-devices",
+              id,
+              ...(request.deviceId ? { deviceId: request.deviceId } : {}),
+              ...(request.all ? { all: true } : {}),
+            };
+    return await new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingCoreCommands.delete(id);
+        reject(
+          new ControlRequestError(
+            "core-command-timeout",
+            "Server Core did not respond to the management command in time",
+            true,
+          ),
+        );
+      }, CORE_COMMAND_TIMEOUT_MS);
+      this.pendingCoreCommands.set(id, { resolve, reject, timer });
+      try {
+        core.send(command);
+      } catch (error) {
+        this.pendingCoreCommands.delete(id);
+        clearTimeout(timer);
+        reject(error);
+      }
+    });
+  }
+
+  private rejectPendingCoreCommands(reason: string): void {
+    // Map 在 for…of 迭代中删除当前条目是安全的。
+    for (const [id, pending] of this.pendingCoreCommands) {
+      this.pendingCoreCommands.delete(id);
+      clearTimeout(pending.timer);
+      pending.reject(new ControlRequestError("core-not-ready", reason, true));
     }
   }
 

@@ -193,6 +193,7 @@ const enUS: Record<string, string> = {
   "remote.status.needsUpdate": "Update required",
   "remote.status.needsIdentity": "Confirm new device",
   "remote.status.needsCredentials": "Password required",
+  "remote.status.needsPairing": "Re-pair",
   "remote.action.connect": "Connect",
   "remote.action.disconnect": "Disconnect",
   "remote.action.cancel": "Cancel connection",
@@ -210,6 +211,8 @@ const enUS: Record<string, string> = {
   "remote.action.security": "View security information",
   "remote.action.details": "View details",
   "remote.action.retry": "Retry",
+  "remote.action.pairing-retry": "Retry with new code",
+  "remote.action.re-pair": "Re-pair",
   "remote.action.none": "",
   "remote.error.authentication": "SSH authentication failed",
   "remote.error.details": "Details",
@@ -234,6 +237,12 @@ const enUS: Record<string, string> = {
     "The connection was canceled. You can reconnect at any time.",
   "remote.error.credentialsRequired.reason":
     "Enter the password or key passphrase for this connection.",
+  "remote.error.pairingCodeInvalid.reason":
+    "Run zcode serve pair on the remote computer again and retry with the new pairing code.",
+  "remote.error.deviceRevoked.reason":
+    "This device's pairing was revoked on the remote computer. Re-pair to reconnect.",
+  "remote.error.authRequired.reason":
+    "The remote computer requires device credentials. Re-pair and retry.",
   "remote.error.authentication.reason":
     "Check your SSH username, password or private key and retry.",
   "remote.error.unknown.reason": "Unable to connect. Retry or view details.",
@@ -318,6 +327,7 @@ const enUS: Record<string, string> = {
   "remote.phase.channel.ssh": "Connecting to SSH host",
   "remote.phase.channel.wsl": "Starting and connecting to distribution",
   "remote.phase.channel.docker": "Connecting to container",
+  "remote.phase.channel.server": "Establishing direct channel",
   "startPlan.recommendation.subagentDescription":
     "Your Start Plan has quota available for {model}. Switch this subagent’s model to the Start Plan?",
   "startPlan.recommendation.preferenceSaveFailed":
@@ -2243,6 +2253,9 @@ const enUS: Record<string, string> = {
     "The connection target identity has changed. Confirm whether to use it as a new device.",
   "remote.error.credentialsRequired":
     "No usable SSH password or private-key credential is available. Return to settings to add one.",
+  "remote.error.pairingCodeInvalid": "Pairing code is invalid or expired",
+  "remote.error.deviceRevoked": "This device's pairing was revoked on the remote computer",
+  "remote.error.authRequired": "Direct connection requires re-pairing",
   "remote.error.sourceServerUpgradeRequired":
     "remote device is incompatible with this ZCode Desktop version and must be upgraded.",
   "remote.error.sourceServerRunningTasks":
@@ -2358,7 +2371,7 @@ const enUS: Record<string, string> = {
   "remote.selection.new.ssh": "New SSH connection",
   "remote.selection.new.wsl": "Enter WSL manually",
   "remote.selection.new.docker": "Enter Docker manually",
-  "remote.selection.new.server": "Development Server",
+  "remote.selection.new.server": "Direct connection",
   "remote.selection.keyboard":
     "Tab / ↑↓ to select · Enter to connect · Click a recent directory to open",
   "remote.selection.back": "Back to list",
@@ -2390,7 +2403,6 @@ const enUS: Record<string, string> = {
   "remote.deviceReconnect": "Connect",
   "remote.deviceReinstall": "Reinstall and connect",
   "remote.deviceIdentify": "Connect",
-  "remote.directServer": "Direct server",
   "remote.manage": "Manage",
   "remote.settingsStepTitle": "New connection",
   "remote.history.empty": "No matching saved connections",
@@ -2409,6 +2421,8 @@ const enUS: Record<string, string> = {
   "remote.phase.identify": "Identify device",
   "remote.phase.deploy": "Install ZCode Server",
   "remote.phase.handshake": "Start and check compatibility",
+  "remote.phase.verify": "Verify pairing code",
+  "remote.phase.handshake.server": "Start connection",
   "remote.progress.step": "Step {current}/{total}",
   "remote.progress.elapsedSeconds": "{seconds}s elapsed",
   "remote.progress.elapsedMinutesSeconds": "{minutes}m {seconds}s elapsed",
@@ -2445,7 +2459,9 @@ const enUS: Record<string, string> = {
   "remote.phaseSub.channelEstablished.ssh": "Connected to the SSH host",
   "remote.phaseSub.channelEstablished.wsl": "Connected to the distribution",
   "remote.phaseSub.channelEstablished.docker": "Connected to the container",
+  "remote.phaseSub.channelEstablished.server": "Direct channel established",
   "remote.phaseSub.channelEstablished": "Connected to device",
+  "remote.phaseSub.pairingVerified": "Pairing code verified",
   "remote.phaseSub.identifyExisting": "Connected to device {device}",
   "remote.phaseSub.identifyNew": "New device · ZCode Server not installed",
   "remote.phaseSub.deploySkipped": "Remote already on v{version} · deployment skipped",
@@ -2567,11 +2583,9 @@ const enUS: Record<string, string> = {
   "remote.methods": "Connection method",
   "remote.connectionType": "Connection type",
   "remote.kind.ssh": "SSH",
-  "remote.kind.server": "Server",
+  "remote.kind.server": "Direct",
   "remote.kind.wsl": "WSL",
   "remote.kind.docker": "Docker",
-  "remote.kind.server.note":
-    "Server (direct connection to a running ZCode service) is shown only in development builds.",
   "remote.addAndConnect": "Add and connect",
   "remote.connect": "Connect",
   "remote.connecting": "Connecting...",
@@ -2797,19 +2811,22 @@ const enUS: Record<string, string> = {
   "remote.log.requestingSession": "Requesting the host process to create a remote session...",
   "remote.log.sessionReady":
     "Remote session created successfully. You can choose a directory next.",
-  "server.description": "Connect to an already running ZCode server.",
-  "server.url": "Server URL",
-  "server.urlPlaceholder": "e.g. https://studio.example.com:3030",
-  "server.name": "Display name",
-  "server.namePlaceholder": "e.g. Studio",
-  "server.token": "Token (optional)",
-  "server.tokenPlaceholder": "Enter connection token",
+  "server.host": "Host",
+  "server.hostPlaceholder": "e.g. 192.168.1.5",
+  "server.port": "Port",
+  "server.pairingCode": "Pairing code",
+  "server.pairingCodePlaceholder": "Paste the pairing code from zcode serve pair",
+  "server.pairingCodeDescription":
+    "Run zcode serve pair on the remote computer to get a pairing code; the device credential is saved after the first successful pairing.",
+  "server.name": "Device name (optional)",
+  "server.namePlaceholder": "e.g. Studio desktop",
   "server.workspacePath": "Default directory (optional)",
   "server.workspacePathPlaceholder": "e.g. /srv/project",
   "server.workspacePathDescription":
-    "Leave empty to choose a directory on the server after connecting.",
-  "server.validation.urlRequired": "Server URL is required",
-  "server.validation.invalidUrl": "Server URL is invalid",
+    "Leave empty to choose a directory on the remote computer after connecting.",
+  "server.validation.hostRequired": "Host is required",
+  "server.validation.port": "Port must be an integer from 1 to 65535",
+  "server.validation.pairingCodeRequired": "Enter the pairing code",
   "wsl.distro": "Distribution",
   "wsl.defaultDistro": "Default distribution",
   "wsl.user": "Linux user",

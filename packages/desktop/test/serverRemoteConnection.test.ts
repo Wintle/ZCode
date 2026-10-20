@@ -317,12 +317,14 @@ describe("server remote connection", () => {
     expect(resolveServerRemoteEndpoints("https://studio.example.com/zcode/")).toEqual({
       infoUrl: "https://studio.example.com/zcode/api/server-info",
       wsUrl: "wss://studio.example.com/zcode/ws",
+      pairUrl: "https://studio.example.com/zcode/api/pair",
       hostCapabilityUrl: "https://studio.example.com/zcode/api/rpc-host-capability",
       hostWsUrl: "wss://studio.example.com/zcode/ws/host",
     });
     expect(resolveServerRemoteEndpoints("ws://127.0.0.1:3030/ws")).toEqual({
       infoUrl: "http://127.0.0.1:3030/api/server-info",
       wsUrl: "ws://127.0.0.1:3030/ws",
+      pairUrl: "http://127.0.0.1:3030/api/pair",
       hostCapabilityUrl: "http://127.0.0.1:3030/api/rpc-host-capability",
       hostWsUrl: "ws://127.0.0.1:3030/ws/host",
     });
@@ -641,5 +643,215 @@ describe("server remote connection", () => {
       }),
     ).toBe(401);
     trusted.socket.close();
+  });
+
+  describe("配对码交换与 401 分类", () => {
+    it("配对码先换设备 Token 再握手，Token 经 onDeviceToken 回传并贯穿后续请求", async () => {
+      const services = new ServiceCollection().register(IZCodeAgentService, {
+        helloConversationV4: vi.fn(),
+        initializeConversationV4: vi.fn(),
+      } as never);
+      const server = await startLoopbackServer(services, 0, { serverId: "paired-server" });
+      const address = server.address() as AddressInfo;
+      const steps: string[] = [];
+      const requestedUrls: URL[] = [];
+      const onDeviceToken = vi.fn(async (_deviceToken: string, _pairing: { serverId: string }) => {
+        // 回传发生在握手之前：一次性配对码一旦消费，凭据必须立刻交由调用方落盘。
+        steps.push("onDeviceToken");
+      });
+      const commitMembership = vi.fn(
+        async (_sourceServerId: string, _facts?: { name?: string }) => undefined,
+      );
+      const connection = await connectServerRemote(
+        { kind: "server", url: `http://127.0.0.1:${address.port}`, pairingCode: "AbCd-1234" },
+        {
+          onDeviceToken,
+          commitMembership,
+          fetchImpl: async (input, init) => {
+            const url = new URL(String(input));
+            if (url.pathname === "/api/pair") {
+              steps.push("/api/pair");
+              expect(JSON.parse(String(init?.body))).toEqual({ code: "AbCd-1234" });
+              return Response.json({ deviceToken: "device-token", serverId: "paired-server" });
+            }
+            steps.push(url.pathname);
+            requestedUrls.push(url);
+            return fetch(input, init);
+          },
+        },
+      );
+      disposables.push(connection);
+
+      expect(steps).toEqual([
+        "/api/pair",
+        "onDeviceToken",
+        "/api/server-info",
+        "/api/rpc-host-capability",
+      ]);
+      expect(onDeviceToken).toHaveBeenCalledExactlyOnceWith("device-token", {
+        serverId: "paired-server",
+      });
+      expect(requestedUrls.every((url) => url.searchParams.get("token") === "device-token")).toBe(
+        true,
+      );
+      expect(connection.serverInfo.serverId).toBe("paired-server");
+      // 设备名缺省时取 server-info 的 name/hostname，由 commit 回传给快照侧补默认值。
+      const [, facts] = commitMembership.mock.calls[0] ?? [];
+      expect(facts?.name?.trim()).toBeTruthy();
+    });
+
+    it.each([
+      ["pairing-code-invalid", "pairing code mismatch"],
+      ["pairing-code-expired", "pairing code expired"],
+      ["pairing-rate-limited", "too many pairing attempts"],
+      ["pairing-disabled", "pairing is disabled"],
+    ] as const)("配对失败 %s 归为配对码错误且不开始握手", async (wireCode, serverMessage) => {
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/api/pair") {
+          return new Response(JSON.stringify({ error: serverMessage, code: wireCode }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        throw new Error("handshake must not start before pairing succeeds");
+      });
+      const onDeviceToken = vi.fn(async (_deviceToken: string) => undefined);
+      await expect(
+        connectServerRemote(
+          { kind: "server", url: "http://127.0.0.1:1", pairingCode: "AbCd-1234" },
+          { fetchImpl, onDeviceToken },
+        ),
+      ).rejects.toMatchObject({
+        code: "remote-pairing-code-invalid",
+        retryable: false,
+        message: serverMessage,
+      });
+      expect(onDeviceToken).not.toHaveBeenCalled();
+    });
+
+    it("配对失败且响应无结构化正文时保留状态码消息", async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response("", { status: 404 }));
+      await expect(
+        connectServerRemote(
+          { kind: "server", url: "http://127.0.0.1:1", pairingCode: "AbCd-1234" },
+          { fetchImpl },
+        ),
+      ).rejects.toMatchObject({
+        code: "remote-pairing-code-invalid",
+        retryable: false,
+        message: "Pairing request failed: 404",
+      });
+    });
+
+    it("配对响应缺少必要字段时按无效响应失败", async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/api/pair") return Response.json({ deviceToken: "" });
+        throw new Error("handshake must not start");
+      });
+      await expect(
+        connectServerRemote(
+          { kind: "server", url: "http://127.0.0.1:1", pairingCode: "AbCd-1234" },
+          { fetchImpl },
+        ),
+      ).rejects.toThrow("Pairing response is invalid");
+    });
+
+    it.each([
+      ["device-revoked", "remote-device-revoked"],
+      ["auth-required", "remote-auth-required"],
+    ] as const)("受保护端点 401 body %s 分类为 %s", async (wireCode, expectedCode) => {
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/api/server-info") {
+          return new Response(JSON.stringify({ code: wireCode }), {
+            status: 401,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        throw new Error("handshake must stop at the classified 401");
+      });
+      await expect(
+        connectServerRemote(
+          { kind: "server", url: "http://127.0.0.1:1", token: "stale-token" },
+          { fetchImpl },
+        ),
+      ).rejects.toMatchObject({ code: expectedCode, retryable: false });
+    });
+
+    it("401 无稳定 body code 时保持既有失败语义", async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/api/server-info") return new Response("", { status: 401 });
+        throw new Error("unexpected");
+      });
+      const failure = await connectServerRemote(
+        { kind: "server", url: "http://127.0.0.1:1", token: "stale-token" },
+        { fetchImpl },
+      ).then(
+        () => undefined,
+        (error: unknown) => error as { message?: unknown; code?: unknown },
+      );
+      expect(failure).toMatchObject({ message: "Server info request failed: 401" });
+      expect(failure?.code).toBeUndefined();
+    });
+
+    it("已持有 Token 时握手 401 分类为需配对才消费配对码，配对后重试一次", async () => {
+      const services = new ServiceCollection().register(IZCodeAgentService, {
+        helloConversationV4: vi.fn(),
+        initializeConversationV4: vi.fn(),
+      } as never);
+      const server = await startLoopbackServer(services, 0, { serverId: "repair-server" });
+      const address = server.address() as AddressInfo;
+      const steps: string[] = [];
+      let infoCalls = 0;
+      const onDeviceToken = vi.fn(
+        async (_deviceToken: string, _pairing: { serverId: string }) => undefined,
+      );
+      const connection = await connectServerRemote(
+        {
+          kind: "server",
+          url: `http://127.0.0.1:${address.port}`,
+          token: "stale-token",
+          pairingCode: "New-Code",
+        },
+        {
+          onDeviceToken,
+          fetchImpl: async (input, init) => {
+            const url = new URL(String(input));
+            if (url.pathname === "/api/pair") {
+              steps.push("/api/pair");
+              return Response.json({ deviceToken: "fresh-token", serverId: "repair-server" });
+            }
+            if (url.pathname === "/api/server-info") {
+              steps.push("/api/server-info");
+              infoCalls += 1;
+              if (infoCalls === 1) {
+                return new Response(JSON.stringify({ code: "auth-required" }), {
+                  status: 401,
+                  headers: { "content-type": "application/json" },
+                });
+              }
+              return fetch(input, init);
+            }
+            steps.push(url.pathname);
+            return fetch(input, init);
+          },
+        },
+      );
+      disposables.push(connection);
+
+      expect(steps).toEqual([
+        "/api/server-info",
+        "/api/pair",
+        "/api/server-info",
+        "/api/rpc-host-capability",
+      ]);
+      expect(onDeviceToken).toHaveBeenCalledExactlyOnceWith("fresh-token", {
+        serverId: "repair-server",
+      });
+      expect(connection.serverInfo.serverId).toBe("repair-server");
+    });
   });
 });

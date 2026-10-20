@@ -464,6 +464,8 @@ export const serverConnectOptionsSchema = z.object({
   url: z.string().url(),
   name: nonEmptyStringSchema.optional(),
   token: z.string().optional(),
+  // 配对码只随连接请求进入 Host；持久化快照 schema 不含该字段，天然不落盘。
+  pairingCode: z.string().optional(),
   workspacePath: z.string().optional(),
   serverId: nonEmptyStringSchema.optional(),
 });
