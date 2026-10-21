@@ -2714,6 +2714,55 @@ const enUS: Record<string, string> = {
   "settings.source.startupAutoReconnect": "Reconnect automatically at startup",
   "settings.source.startupAutoReconnectDescription":
     "Reconnects devices seen online in the last 7 days at startup. Changes take effect on the next startup.",
+  "settings.localServerHosting.title": "This computer as a controlled device",
+  "settings.localServerHosting.description":
+    "Run ZCode Server on this computer so other computers on your network can add it as a direct connection.",
+  "settings.localServerHosting.refresh": "Refresh",
+  "settings.localServerHosting.status.running": "Running",
+  "settings.localServerHosting.status.stopped": "Stopped",
+  "settings.localServerHosting.status.listenLocal": "This computer only",
+  "settings.localServerHosting.status.listenLan": "LAN {address}",
+  "settings.localServerHosting.status.deviceCount": "{count} paired device(s)",
+  "settings.localServerHosting.status.deviceCountUnknown": "Paired device count unavailable",
+  "settings.localServerHosting.lanToggle.label": "Allow other computers on this network to connect",
+  "settings.localServerHosting.lanToggle.description":
+    "When enabled, other computers can connect directly to this computer by IP and port; when disabled, only this computer can connect.",
+  "settings.localServerHosting.lanToggle.portLabel": "Port",
+  "settings.localServerHosting.portInvalid": "Port must be an integer between 1 and 65535",
+  "settings.localServerHosting.installConfirmTitle": "Install and start the ZCode Server service",
+  "settings.localServerHosting.installConfirmDescription":
+    "ZCode Server is not installed on this computer yet. Continue to install and start it in the background to accept connections from your network.",
+  "settings.localServerHosting.installConfirmAction": "Install and start",
+  "settings.localServerHosting.copyCommand": "Copy command",
+  "settings.localServerHosting.copyCommandSuccess": "Command copied",
+  "settings.localServerHosting.addresses.title": "Local addresses",
+  "settings.localServerHosting.addresses.copy": "Copy address {address}",
+  "settings.localServerHosting.addresses.copySuccess": "Copied {address}",
+  "settings.localServerHosting.pairing.generate": "Generate pairing code",
+  "settings.localServerHosting.pairing.generating": "Generating…",
+  "settings.localServerHosting.pairing.hint":
+    "Enter this pairing code when adding a direct connection from the controlling device.",
+  "settings.localServerHosting.pairing.expiresIn": "Expires in {seconds}s",
+  "settings.localServerHosting.pairing.expired": "Expired",
+  "settings.localServerHosting.pairing.copy": "Copy pairing code",
+  "settings.localServerHosting.pairing.copySuccess": "Pairing code copied",
+  "settings.localServerHosting.devices.title": "Paired devices",
+  "settings.localServerHosting.devices.empty": "No paired devices yet.",
+  "settings.localServerHosting.devices.lastSeen": "Last seen {time}",
+  "settings.localServerHosting.devices.revoke": "Revoke",
+  "settings.localServerHosting.devices.revokeAll": "Revoke all",
+  "settings.localServerHosting.devices.revokeConfirmTitle": "Revoke this device's pairing?",
+  "settings.localServerHosting.devices.revokeConfirmDescription":
+    'After revoking, "{name}" can no longer connect to this computer and must pair again.',
+  "settings.localServerHosting.devices.revokeAllConfirmTitle": "Revoke all device pairings?",
+  "settings.localServerHosting.devices.revokeAllConfirmDescription":
+    "This revokes all {count} paired device(s); they must pair again before connecting.",
+  "settings.localServerHosting.error.cliUnavailable":
+    "ZCode Server is not installed on this computer, or the command line is unavailable.",
+  "settings.localServerHosting.error.serverUnavailable":
+    "ZCode Server is not running. Start it first.",
+  "settings.localServerHosting.error.timeout": "The command timed out. Please try again.",
+  "settings.localServerHosting.error.invalidRequest": "Invalid request.",
   "settings.source.updateAvailableVersion": "Update to v{version}",
   "settings.source.error.source-server-remove-callback-missing":
     "The device cannot be removed because desktop connection cleanup is not ready.",

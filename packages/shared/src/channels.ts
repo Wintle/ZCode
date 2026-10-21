@@ -82,6 +82,17 @@ import type {
   OpenCuaPermissionOnboardingOptions,
   PrepareCuaHelperPermissionDragResult,
 } from "./cuaAccessibilitySettings.js";
+import type {
+  LocalServerAddressEntry,
+  LocalServerDeviceEntry,
+  LocalServerHostingOperationResult,
+  LocalServerHostingStatus,
+  LocalServerInstallStartRequest,
+  LocalServerLanEnabledRequest,
+  LocalServerLanToggleResult,
+  LocalServerPairingCode,
+  LocalServerRevokeResult,
+} from "./localServerHosting.js";
 
 // ============================================================================
 // RPC 服务频道 —— 通过 ChannelServer/ChannelClient 传输
@@ -256,6 +267,22 @@ export const PlatformChannels = {
   ListDockerContainers: "zcode:list-docker-containers",
   /** Renderer → Main：列出 SSH config 里可用于快速填表的 alias */
   ListSSHConfigAliases: "zcode:list-ssh-config-aliases",
+  /** Renderer → Main：查询本机作为被控端（zcode serve）状态投影 */
+  GetLocalServerHostingStatus: "zcode:get-local-server-hosting-status",
+  /** Renderer → Main：生成被控端配对码（等价 `zcode serve pair`） */
+  GenerateLocalServerPairingCode: "zcode:generate-local-server-pairing-code",
+  /** Renderer → Main：列出被控端已配对设备 */
+  ListLocalServerDevices: "zcode:list-local-server-devices",
+  /** Renderer → Main：吊销单个被控端设备配对 */
+  RevokeLocalServerDevice: "zcode:revoke-local-server-device",
+  /** Renderer → Main：吊销全部被控端设备配对 */
+  RevokeAllLocalServerDevices: "zcode:revoke-all-local-server-devices",
+  /** Renderer → Main：开启/关闭被控端局域网监听（写配置并重启服务） */
+  SetLocalServerLanEnabled: "zcode:set-local-server-lan-enabled",
+  /** Renderer → Main：安装并启动 ZCode Server 服务（`serve --daemon`，需用户显式确认后调用） */
+  InstallAndStartLocalServer: "zcode:install-and-start-local-server",
+  /** Renderer → Main：枚举本机非回环网卡地址（仅展示） */
+  ListLocalServerAddresses: "zcode:list-local-server-addresses",
   /** Renderer → Main：从用户目录加载 CLI MCP 配置 */
   LoadMcpFromUserDirectory: "zcode:load-mcp-from-user-directory",
   /** Renderer → Main：保存 CLI MCP 配置到用户目录 */
@@ -892,6 +919,38 @@ export interface PlatformChannelMap {
   [PlatformChannels.ListSSHConfigAliases]: {
     request: void;
     response: SSHConfigAliasOption[];
+  };
+  [PlatformChannels.GetLocalServerHostingStatus]: {
+    request: void;
+    response: LocalServerHostingStatus;
+  };
+  [PlatformChannels.GenerateLocalServerPairingCode]: {
+    request: void;
+    response: LocalServerHostingOperationResult<LocalServerPairingCode>;
+  };
+  [PlatformChannels.ListLocalServerDevices]: {
+    request: void;
+    response: LocalServerHostingOperationResult<LocalServerDeviceEntry[]>;
+  };
+  [PlatformChannels.RevokeLocalServerDevice]: {
+    request: { deviceId: string };
+    response: LocalServerHostingOperationResult<LocalServerRevokeResult>;
+  };
+  [PlatformChannels.RevokeAllLocalServerDevices]: {
+    request: void;
+    response: LocalServerHostingOperationResult<LocalServerRevokeResult>;
+  };
+  [PlatformChannels.SetLocalServerLanEnabled]: {
+    request: LocalServerLanEnabledRequest;
+    response: LocalServerHostingOperationResult<LocalServerLanToggleResult>;
+  };
+  [PlatformChannels.InstallAndStartLocalServer]: {
+    request: LocalServerInstallStartRequest;
+    response: LocalServerHostingOperationResult<LocalServerHostingStatus>;
+  };
+  [PlatformChannels.ListLocalServerAddresses]: {
+    request: void;
+    response: LocalServerAddressEntry[];
   };
   [PlatformChannels.LoadMcpFromUserDirectory]: {
     request: LoadCliMcpFromUserDirectoryRequest;

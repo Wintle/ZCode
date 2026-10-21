@@ -407,6 +407,27 @@ export const servePairResultSchema = z.object({
 });
 export type ServePairResult = z.infer<typeof servePairResultSchema>;
 
+/** `serve config set/show` 输出里的生效监听值：host 必有，port 未配置（回环动态端口）时省略。 */
+const serveConfigListenSchema = z
+  .object({
+    host: z.string().trim().min(1),
+    port: z.number().int().min(0).max(65_535).optional(),
+  })
+  .strict();
+
+/** `serve config set` 的 JSON 输出：刚写入 <serverRoot>/server-config.json 的生效监听配置。 */
+export const serveConfigSetResultSchema = z.object({ listen: serveConfigListenSchema }).strict();
+export type ServeConfigSetResult = z.infer<typeof serveConfigSetResultSchema>;
+
+/**
+ * `serve config show` 的 JSON 输出：生效监听与来源。
+ * show 不读 CLI/env 层（两者在无 flag 时不参与），来源只可能是配置文件或默认值。
+ */
+export const serveConfigShowResultSchema = z
+  .object({ listen: serveConfigListenSchema, source: z.enum(["config", "default"]) })
+  .strict();
+export type ServeConfigShowResult = z.infer<typeof serveConfigShowResultSchema>;
+
 /** <serverRoot>/server-config.json：监听配置，生效链路 CLI > 配置文件 > 默认。 */
 export const serverListenConfigSchema = z
   .object({

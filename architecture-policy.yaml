@@ -870,3 +870,12 @@ exceptions:
       - packages/ui/src/remote-connection/RemoteConnectionSelection.tsx
       - packages/ui/src/WorkspaceSidebar/RemoteProjectConnectionDetails.tsx
     reason: 已准入的连接展示投影公开接缝与选择屏存量文件，为局域网直连产品化补第四种连接类型的展示、错误分类与 i18n kind 名；展示模型仍为纯函数、不新增状态所有者，接管 lib/remote-connection/WorkspaceSidebar 目录不在本次范围内（规格见 docs/remote/lan-direct-connection.md）。
+  - id: lan-direct-local-server-hosting-files
+    rule: unmanaged-new-file
+    paths:
+      - packages/shared/src/localServerHosting.ts
+      - packages/desktop/src/main/localServerHostingManager.ts
+      - packages/desktop/src/main/desktopLocalServerHostingIpc.ts
+      - packages/ui/src/hooks/useLocalServerHosting.ts
+      - packages/ui/src/settings/LocalServerHostingPanel.tsx
+    reason: 局域网直连被控端「本机作为被控端」面板的契约、主进程管理器、IPC 注册、hook 与面板；写操作全部经 zcode CLI 子进程单一入口，UI 只投影 CLI 事实，接管 shared/desktop/ui 模块需要单独的边界重构（规格见 docs/remote/lan-direct-connection.md 被控端界面配置一节）。

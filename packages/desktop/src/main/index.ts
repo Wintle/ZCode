@@ -227,6 +227,8 @@ import {
   saveCliMcpToUserDirectory,
 } from "./mcpUserDirectory/index.js";
 import { registerRemoteIpcHandlers } from "./desktopMainIpcRemote.js";
+import { registerLocalServerHostingIpcHandlers } from "./desktopLocalServerHostingIpc.js";
+import { createLocalServerHostingManager } from "./localServerHostingManager.js";
 import {
   configureDesktopStabilityTelemetry,
   getStabilityLifecycleScene,
@@ -2458,6 +2460,11 @@ app.whenReady().then(async () => {
     listAvailableWSLDistros,
     listAvailableDockerContainers,
     listSSHConfigAliases,
+  });
+
+  // 「本机作为被控端」设置面板：main 侧唯一写入口，全部经 zcode CLI 异步子进程。
+  registerLocalServerHostingIpcHandlers({
+    localServerHostingManager: createLocalServerHostingManager(),
   });
 
   // 等待 ARMS 完成 init（含渲染进程注入监听），避免首窗 dom-ready 早于 SDK 注册导致无上报

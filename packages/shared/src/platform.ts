@@ -46,6 +46,17 @@ export type {
   UpdateCheckResultPayload,
   UpdateStatePayload,
 } from "./update.js";
+import type {
+  LocalServerAddressEntry,
+  LocalServerDeviceEntry,
+  LocalServerHostingOperationResult,
+  LocalServerHostingStatus,
+  LocalServerInstallStartRequest,
+  LocalServerLanEnabledRequest,
+  LocalServerLanToggleResult,
+  LocalServerPairingCode,
+  LocalServerRevokeResult,
+} from "./localServerHosting.js";
 
 export interface TaskNotificationPayload {
   taskId: string;
@@ -817,6 +828,40 @@ export interface IPlatformService {
 
   /** 列出当前机器 SSH config 中可用于快速填表的 alias */
   listSSHConfigAliases(): Promise<SSHConfigAliasOption[]>;
+
+  /** Desktop-only：查询本机作为被控端（zcode serve）状态投影；Web 平台可不实现。 */
+  getLocalServerHostingStatus?(): Promise<LocalServerHostingStatus>;
+
+  /** Desktop-only：生成被控端配对码；配对码只在生成时返回一次，不落日志。 */
+  generateLocalServerPairingCode?(): Promise<
+    LocalServerHostingOperationResult<LocalServerPairingCode>
+  >;
+
+  /** Desktop-only：列出被控端已配对设备（不含 token）。 */
+  listLocalServerDevices?(): Promise<LocalServerHostingOperationResult<LocalServerDeviceEntry[]>>;
+
+  /** Desktop-only：吊销单个被控端设备配对。 */
+  revokeLocalServerDevice?(
+    deviceId: string,
+  ): Promise<LocalServerHostingOperationResult<LocalServerRevokeResult>>;
+
+  /** Desktop-only：吊销全部被控端设备配对。 */
+  revokeAllLocalServerDevices?(): Promise<
+    LocalServerHostingOperationResult<LocalServerRevokeResult>
+  >;
+
+  /** Desktop-only：开启/关闭被控端局域网监听（未安装服务时返回 needsInstall 引导）。 */
+  setLocalServerLanEnabled?(
+    request: LocalServerLanEnabledRequest,
+  ): Promise<LocalServerHostingOperationResult<LocalServerLanToggleResult>>;
+
+  /** Desktop-only：安装并启动 ZCode Server 服务；仅用户确认后调用。 */
+  installAndStartLocalServer?(
+    request: LocalServerInstallStartRequest,
+  ): Promise<LocalServerHostingOperationResult<LocalServerHostingStatus>>;
+
+  /** Desktop-only：枚举本机非回环网卡地址（仅展示）。 */
+  listLocalServerAddresses?(): Promise<LocalServerAddressEntry[]>;
 
   /** 读取宿主环境中的原生 MCP 用户目录配置；手机远控通过已连接桌面 host 转发。 */
   loadMcpFromUserDirectory?(

@@ -14,6 +14,8 @@ import {
   revokeDevicesResultSchema,
   runtimeIdentitySchema,
   serverStatusSchema,
+  serveConfigSetResultSchema,
+  serveConfigShowResultSchema,
   servePairResultSchema,
   createStoppedServerStatus,
 } from "../src/contracts.js";
@@ -265,5 +267,41 @@ describe("LAN direct connection contracts (P1)", () => {
     ).toBe(true);
     expect(revokeDevicesResultSchema.safeParse({ revoked: ["d1"] }).success).toBe(true);
     expect(revokeDevicesResultSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("pins the serve config set/show JSON output shapes", () => {
+    expect(
+      serveConfigSetResultSchema.safeParse({ listen: { host: "0.0.0.0", port: 8737 } }).success,
+    ).toBe(true);
+    // 未配置端口的回环结果省略 port；host 为空与缺 listen 块都必须拒绝。
+    expect(serveConfigSetResultSchema.safeParse({ listen: { host: "127.0.0.1" } }).success).toBe(
+      true,
+    );
+    expect(serveConfigSetResultSchema.safeParse({ listen: { host: "" } }).success).toBe(false);
+    expect(serveConfigSetResultSchema.safeParse({ listen: { port: 8737 } }).success).toBe(false);
+    expect(serveConfigSetResultSchema.safeParse({}).success).toBe(false);
+    expect(
+      serveConfigSetResultSchema.safeParse({ listen: { host: "0.0.0.0", port: 8737 }, extra: 1 })
+        .success,
+    ).toBe(false);
+
+    expect(
+      serveConfigShowResultSchema.safeParse({
+        listen: { host: "0.0.0.0", port: 8737 },
+        source: "config",
+      }).success,
+    ).toBe(true);
+    expect(
+      serveConfigShowResultSchema.safeParse({ listen: { host: "127.0.0.1" }, source: "default" })
+        .success,
+    ).toBe(true);
+    // show 不读 CLI/env 层，来源只允许配置文件或默认值。
+    expect(
+      serveConfigShowResultSchema.safeParse({ listen: { host: "127.0.0.1" }, source: "env" })
+        .success,
+    ).toBe(false);
+    expect(serveConfigShowResultSchema.safeParse({ listen: { host: "127.0.0.1" } }).success).toBe(
+      false,
+    );
   });
 });

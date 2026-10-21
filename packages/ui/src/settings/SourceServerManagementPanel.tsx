@@ -51,6 +51,7 @@ import { useSourceServerManagementSnapshot } from "@/hooks/useSourceServerManage
 import { useSourceServerOperationLogs } from "@/hooks/useSourceServerOperationLogs.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { SourceServerMigrationReportPanel } from "@/settings/SourceServerMigrationReportPanel.js";
+import { LocalServerHostingPanel } from "@/settings/LocalServerHostingPanel.js";
 import {
   SourceServerLogList,
   SourceServerUpdateActivity,
@@ -1671,6 +1672,8 @@ export function SourceServerManagementPanel({
             </div>
           </div>
         </section>
+        {/* 「本机作为被控端」面板（仅桌面渲染，平台 bridge 缺失时组件内部隐藏）。 */}
+        <LocalServerHostingPanel />
         {ready && profiles.length === 0 && servers.length === 0 ? (
           <div className="space-y-3 py-4 text-center text-ui-sm text-remote-foreground-muted">
             <p>{intl.formatMessage({ id: "settings.source.empty" })}</p>

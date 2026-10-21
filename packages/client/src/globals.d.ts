@@ -56,6 +56,15 @@ import type {
   UpdateCheckResultPayload,
   UpdateStatePayload,
   OpenInEditorOptions,
+  LocalServerAddressEntry,
+  LocalServerDeviceEntry,
+  LocalServerHostingOperationResult,
+  LocalServerHostingStatus,
+  LocalServerInstallStartRequest,
+  LocalServerLanEnabledRequest,
+  LocalServerLanToggleResult,
+  LocalServerPairingCode,
+  LocalServerRevokeResult,
 } from "@zcode/shared";
 
 /**
@@ -117,6 +126,34 @@ declare global {
       listDockerContainers(): Promise<DockerContainerInfo[]>;
       /** 列出当前机器 SSH config 里可用于快速填表的 alias */
       listSSHConfigAliases(): Promise<SSHConfigAliasOption[]>;
+      /** 查询本机作为被控端（zcode serve）状态投影 */
+      getLocalServerHostingStatus?(): Promise<LocalServerHostingStatus>;
+      /** 生成被控端配对码；配对码只在生成时返回一次 */
+      generateLocalServerPairingCode?(): Promise<
+        LocalServerHostingOperationResult<LocalServerPairingCode>
+      >;
+      /** 列出被控端已配对设备（不含 token） */
+      listLocalServerDevices?(): Promise<
+        LocalServerHostingOperationResult<LocalServerDeviceEntry[]>
+      >;
+      /** 吊销单个被控端设备配对 */
+      revokeLocalServerDevice?(
+        deviceId: string,
+      ): Promise<LocalServerHostingOperationResult<LocalServerRevokeResult>>;
+      /** 吊销全部被控端设备配对 */
+      revokeAllLocalServerDevices?(): Promise<
+        LocalServerHostingOperationResult<LocalServerRevokeResult>
+      >;
+      /** 开启/关闭被控端局域网监听（写配置并重启服务） */
+      setLocalServerLanEnabled?(
+        request: LocalServerLanEnabledRequest,
+      ): Promise<LocalServerHostingOperationResult<LocalServerLanToggleResult>>;
+      /** 安装并启动 ZCode Server 服务（仅用户确认后调用） */
+      installAndStartLocalServer?(
+        request: LocalServerInstallStartRequest,
+      ): Promise<LocalServerHostingOperationResult<LocalServerHostingStatus>>;
+      /** 枚举本机非回环网卡地址（仅展示） */
+      listLocalServerAddresses?(): Promise<LocalServerAddressEntry[]>;
       /** renderer 日志通过 IPC 传到 main 进程统一存储 */
       log(level: "info" | "warn" | "error", args: unknown[]): void;
       /** 打开系统目录选择框，返回选中路径或 null */

@@ -92,6 +92,15 @@ import type {
   OpenCuaPermissionOnboardingOptions,
   ConfigureFinalArmsCustomEventE2ERequest,
   FinalArmsCustomEventE2EEntry,
+  LocalServerAddressEntry,
+  LocalServerDeviceEntry,
+  LocalServerHostingOperationResult,
+  LocalServerHostingStatus,
+  LocalServerInstallStartRequest,
+  LocalServerLanEnabledRequest,
+  LocalServerLanToggleResult,
+  LocalServerPairingCode,
+  LocalServerRevokeResult,
 } from "@zcode/shared";
 import { unwrapRemoteWorkspaceBindResult } from "./remoteWorkspaceBindBridge.js";
 import {
@@ -316,6 +325,39 @@ contextBridge.exposeInMainWorld("zcode", {
   listDockerContainers: () => ipcRenderer.invoke(PlatformChannels.ListDockerContainers),
   listSSHConfigAliases: (): Promise<SSHConfigAliasOption[]> =>
     ipcRenderer.invoke(PlatformChannels.ListSSHConfigAliases),
+  /** 查询本机作为被控端（zcode serve）状态投影 */
+  getLocalServerHostingStatus: (): Promise<LocalServerHostingStatus> =>
+    ipcRenderer.invoke(PlatformChannels.GetLocalServerHostingStatus),
+  /** 生成被控端配对码（等价 zcode serve pair；配对码不落日志） */
+  generateLocalServerPairingCode: (): Promise<
+    LocalServerHostingOperationResult<LocalServerPairingCode>
+  > => ipcRenderer.invoke(PlatformChannels.GenerateLocalServerPairingCode),
+  /** 列出被控端已配对设备（不含 token） */
+  listLocalServerDevices: (): Promise<
+    LocalServerHostingOperationResult<LocalServerDeviceEntry[]>
+  > => ipcRenderer.invoke(PlatformChannels.ListLocalServerDevices),
+  /** 吊销单个被控端设备配对 */
+  revokeLocalServerDevice: (
+    deviceId: string,
+  ): Promise<LocalServerHostingOperationResult<LocalServerRevokeResult>> =>
+    ipcRenderer.invoke(PlatformChannels.RevokeLocalServerDevice, { deviceId }),
+  /** 吊销全部被控端设备配对 */
+  revokeAllLocalServerDevices: (): Promise<
+    LocalServerHostingOperationResult<LocalServerRevokeResult>
+  > => ipcRenderer.invoke(PlatformChannels.RevokeAllLocalServerDevices),
+  /** 开启/关闭被控端局域网监听（写配置并重启服务） */
+  setLocalServerLanEnabled: (
+    request: LocalServerLanEnabledRequest,
+  ): Promise<LocalServerHostingOperationResult<LocalServerLanToggleResult>> =>
+    ipcRenderer.invoke(PlatformChannels.SetLocalServerLanEnabled, request),
+  /** 安装并启动 ZCode Server 服务（仅用户确认后调用） */
+  installAndStartLocalServer: (
+    request: LocalServerInstallStartRequest,
+  ): Promise<LocalServerHostingOperationResult<LocalServerHostingStatus>> =>
+    ipcRenderer.invoke(PlatformChannels.InstallAndStartLocalServer, request),
+  /** 枚举本机非回环网卡地址（仅展示） */
+  listLocalServerAddresses: (): Promise<LocalServerAddressEntry[]> =>
+    ipcRenderer.invoke(PlatformChannels.ListLocalServerAddresses),
   loadMcpFromUserDirectory: (payload?: LoadCliMcpFromUserDirectoryRequest) =>
     ipcRenderer.invoke(PlatformChannels.LoadMcpFromUserDirectory, payload ?? {}),
   saveMcpToUserDirectory: (payload: SaveCliMcpToUserDirectoryRequest) =>

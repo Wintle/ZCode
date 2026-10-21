@@ -15,6 +15,8 @@ import {
   serverStatusSchema,
   SERVER_LISTEN_HOST_ENV,
   SERVER_LISTEN_PORT_ENV,
+  serveConfigSetResultSchema,
+  serveConfigShowResultSchema,
   type ServerStatus,
 } from "./contracts.js";
 import {
@@ -331,6 +333,73 @@ async function resolveServeListenPlan(
   return { cli, effective, descriptorArgs };
 }
 
+/** `serve config set/show`：只读写 <serverRoot>/server-config.json，不触达 control socket，不启停服务。 */
+async function runServeConfigCommand(
+  args: readonly string[],
+  io: CliIO,
+  json: boolean,
+  layout: ReturnType<typeof resolveServerLayout>,
+): Promise<number> {
+  // --json 是 runServerCli 的全局输出开关，不属于 config 子命令参数（与 tokens 一致）。
+  const configArgs = args.filter((entry) => entry !== "--json");
+  const subcommand = configArgs[0];
+  if (subcommand === "set") {
+    return await runServeConfigSetCommand(configArgs.slice(1), io, json, layout);
+  }
+  if (subcommand === "show") {
+    return await runServeConfigShowCommand(configArgs.slice(1), io, json, layout);
+  }
+  throw new Error(
+    subcommand
+      ? `Unknown config subcommand: ${subcommand}`
+      : "usage: zcode serve config set --host <ip> [--port <n>] | show",
+  );
+}
+
+function formatListenTarget(target: ResolvedListenTarget): string {
+  return target.port !== undefined ? `${target.host}:${target.port}` : target.host;
+}
+
+async function runServeConfigSetCommand(
+  args: readonly string[],
+  io: CliIO,
+  json: boolean,
+  layout: ReturnType<typeof resolveServerLayout>,
+): Promise<number> {
+  // 复用 serve 的 flag 解析、配置优先级（CLI > 配置文件 > 默认）与非回环缺端口 fail-fast，
+  // 保证 set 落盘的值就是 serve 下次启动的生效值。
+  const plan = await resolveServeListenPlan(args, layout);
+  if (plan.cli.host === undefined) throw new Error("serve config set requires --host <ip>");
+  // 持久化 port 0（动态端口）会让配置文件与实际监听脱节：被控端设置面板读回的端口永远错误。
+  // 本命令只接受 1–65535 的确定端口；非回环 host 的端口强制已由 resolveListenTarget 保证。
+  if (plan.cli.port === 0) {
+    throw new Error(`--port must be an integer between 1 and 65535, got ${plan.cli.port}`);
+  }
+  await writeServerConfig(layout, { listen: plan.effective });
+  const result = serveConfigSetResultSchema.parse({ listen: plan.effective });
+  if (json) stdout(io, result);
+  else stdout(io, `Server listen config saved: ${formatListenTarget(plan.effective)}`);
+  return 0;
+}
+
+async function runServeConfigShowCommand(
+  args: readonly string[],
+  io: CliIO,
+  json: boolean,
+  layout: ReturnType<typeof resolveServerLayout>,
+): Promise<number> {
+  if (args.length > 0) throw new Error(`Unknown config show argument: ${args[0]}`);
+  const config = await readServerConfig(layout);
+  // show 不读 CLI/env 层：展示的是 serve 在无 flag 覆盖时的生效值，来源只可能是配置文件或默认值。
+  const effective = resolveListenTarget({}, config);
+  const source: "config" | "default" =
+    config?.listen?.host !== undefined || config?.listen?.port !== undefined ? "config" : "default";
+  const result = serveConfigShowResultSchema.parse({ listen: effective, source });
+  if (json) stdout(io, result);
+  else stdout(io, `Server listen config: ${formatListenTarget(effective)} (source: ${source})`);
+  return 0;
+}
+
 async function runServe(
   args: readonly string[],
   io: CliIO,
@@ -338,9 +407,10 @@ async function runServe(
   layout: ReturnType<typeof resolveServerLayout>,
   runtimeOptions: ServerCliRuntimeOptions,
 ): Promise<number> {
-  // `zcode serve pair` / `zcode serve tokens`：管理命令先分发，不进入 serve 生命周期。
+  // `zcode serve pair` / `zcode serve tokens` / `zcode serve config`：管理命令先分发，不进入 serve 生命周期。
   if (args[0] === "pair") return await runServePairCommand(io, json, layout);
   if (args[0] === "tokens") return await runServeTokensCommand(args.slice(1), io, json, layout);
+  if (args[0] === "config") return await runServeConfigCommand(args.slice(1), io, json, layout);
   const listenPlan = await resolveServeListenPlan(args, layout);
   if (
     (listenPlan.cli.host !== undefined || listenPlan.cli.port !== undefined) &&

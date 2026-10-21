@@ -1,8 +1,44 @@
 import { recordArmsCustomEventForE2E } from "@zcode/ui";
-import { DesktopCommandIds, buildLocalMediaPreviewUrl, type IPlatformService } from "@zcode/shared";
+import {
+  DesktopCommandIds,
+  buildLocalMediaPreviewUrl,
+  type IPlatformService,
+  type LocalServerHostingFailure,
+  type LocalServerHostingOperationResult,
+  type LocalServerHostingStatus,
+} from "@zcode/shared";
 
 import { desktopBrowserPlatformBridge } from "./desktopBrowserPlatformBridge.js";
 import { createDesktopPluginSandboxPlatform } from "./plugin-sandbox/desktopPluginSandboxPlatform.js";
+
+// 旧 preload（升级窗口）可能未暴露被控端 bridge；与既有可选 bridge 兜底一致，
+// 返回结构化不可用态而不是抛错，UI 据此展示「桌面桥未就绪」。
+function unsupportedLocalServerHosting<T>(): LocalServerHostingOperationResult<T> {
+  const fail: LocalServerHostingFailure = {
+    code: "cli-unavailable",
+    message: "Local server hosting bridge is unavailable in this preload",
+  };
+  return { ok: false, failure: fail };
+}
+
+function fallbackLocalServerHostingStatus(): LocalServerHostingStatus {
+  return {
+    cliAvailable: false,
+    installed: false,
+    running: false,
+    state: null,
+    listenHost: null,
+    listenPort: null,
+    lanEnabled: false,
+    pairedDeviceCount: null,
+    serviceRegistered: false,
+    version: null,
+    failure: {
+      code: "cli-unavailable",
+      message: "Local server hosting bridge is unavailable in this preload",
+    },
+  };
+}
 
 export function createDesktopPlatform(options: {
   isLocalDevelopmentRuntime: boolean;
@@ -47,6 +83,22 @@ export function createDesktopPlatform(options: {
     listWSLDistros: () => window.zcode.listWSLDistros(),
     listDockerContainers: () => window.zcode.listDockerContainers(),
     listSSHConfigAliases: () => window.zcode.listSSHConfigAliases(),
+    getLocalServerHostingStatus: () =>
+      window.zcode.getLocalServerHostingStatus?.() ?? fallbackLocalServerHostingStatus(),
+    generateLocalServerPairingCode: () =>
+      window.zcode.generateLocalServerPairingCode?.() ?? unsupportedLocalServerHosting(),
+    listLocalServerDevices: () =>
+      window.zcode.listLocalServerDevices?.() ?? unsupportedLocalServerHosting(),
+    revokeLocalServerDevice: (deviceId) =>
+      window.zcode.revokeLocalServerDevice?.(deviceId) ?? unsupportedLocalServerHosting(),
+    revokeAllLocalServerDevices: () =>
+      window.zcode.revokeAllLocalServerDevices?.() ?? unsupportedLocalServerHosting(),
+    setLocalServerLanEnabled: (request) =>
+      window.zcode.setLocalServerLanEnabled?.(request) ?? unsupportedLocalServerHosting(),
+    installAndStartLocalServer: (request) =>
+      window.zcode.installAndStartLocalServer?.(request) ?? unsupportedLocalServerHosting(),
+    listLocalServerAddresses: () =>
+      window.zcode.listLocalServerAddresses?.() ?? Promise.resolve([]),
     loadMcpFromUserDirectory: (payload) => window.zcode.loadMcpFromUserDirectory(payload),
     saveMcpToUserDirectory: (payload) => window.zcode.saveMcpToUserDirectory(payload),
     migrateLegacyCommonMcp: (payload) => window.zcode.migrateLegacyCommonMcp(payload),

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -292,5 +292,173 @@ describe("serve pairing and token management CLI", () => {
       "--port",
       "8737",
     ]);
+  });
+});
+
+describe("serve config set/show CLI", () => {
+  it("writes only server-config.json and confirms in one line without lifecycle IO", async () => {
+    const { layout } = await createFixture();
+
+    const json = await runCli([
+      ...serveArgs(layout, "config", "set", "--host", "0.0.0.0", "--port", "8737"),
+      "--json",
+    ]);
+    expect(json.exit).toBe(0);
+    expect(JSON.parse(json.stdout.join(""))).toEqual({
+      listen: { host: "0.0.0.0", port: 8737 },
+    });
+    expect(JSON.parse(await readFile(layout.serverConfigFile, "utf8"))).toEqual({
+      listen: { host: "0.0.0.0", port: 8737 },
+    });
+    if (process.platform !== "win32") {
+      expect((await stat(layout.serverConfigFile)).mode & 0o777).toBe(0o600);
+    }
+
+    // 不启停任何服务：run 目录、status 与 lock 都不能出现。
+    await expect(readFile(layout.statusFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(layout.lockFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const text = await runCli(
+      serveArgs(layout, "config", "set", "--host", "127.0.0.1", "--port", "9000"),
+    );
+    expect(text.exit).toBe(0);
+    const lines = text.stdout.join("").trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("127.0.0.1:9000");
+  });
+
+  it("reuses the serve listen validation and fails before any write", async () => {
+    const { layout } = await createFixture();
+
+    // 非回环缺端口 fail-fast，与 serve --host/--port 同一解析链路。
+    const missingPort = await runCli(serveArgs(layout, "config", "set", "--host", "0.0.0.0"));
+    expect(missingPort.exit).toBe(1);
+    expect(missingPort.stderr.join("")).toContain("requires an explicit --port");
+    await expect(readFile(layout.serverConfigFile, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(layout.statusFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const outOfRange = await runCli(
+      serveArgs(layout, "config", "set", "--host", "127.0.0.1", "--port", "70000"),
+    );
+    expect(outOfRange.exit).toBe(1);
+    expect(outOfRange.stderr.join("")).toContain("--port must be an integer");
+
+    // 持久化配置写 0（动态端口）会让配置与实际监听脱节，set 只接受 1–65535。
+    const dynamicPort = await runCli(
+      serveArgs(layout, "config", "set", "--host", "127.0.0.1", "--port", "0"),
+    );
+    expect(dynamicPort.exit).toBe(1);
+    expect(dynamicPort.stderr.join("")).toContain("between 1 and 65535");
+
+    const missingHost = await runCli(serveArgs(layout, "config", "set", "--port", "8737"));
+    expect(missingHost.exit).toBe(1);
+    expect(missingHost.stderr.join("")).toContain("--host");
+
+    const duplicate = await runCli(
+      serveArgs(layout, "config", "set", "--host", "10.0.0.1", "--host", "10.0.0.2"),
+    );
+    expect(duplicate.exit).toBe(1);
+    expect(duplicate.stderr.join("")).toContain("--host may only be specified once");
+
+    const unknown = await runCli(serveArgs(layout, "config", "reboot"));
+    expect(unknown.exit).toBe(1);
+    expect(unknown.stderr.join("")).toContain("Unknown config subcommand");
+  });
+
+  it("merges set flags over the existing config with the serve precedence", async () => {
+    const { layout } = await createFixture();
+    await mkdir(layout.serverRoot, { recursive: true });
+    await writeFile(
+      layout.serverConfigFile,
+      `${JSON.stringify({ listen: { host: "192.168.1.5", port: 8737 } }, null, 2)}\n`,
+      "utf8",
+    );
+
+    // CLI > 配置文件 > 默认：只给 --host 时沿用配置里的 port，写回的是生效值。
+    const json = await runCli([
+      ...serveArgs(layout, "config", "set", "--host", "10.0.0.9"),
+      "--json",
+    ]);
+    expect(json.exit).toBe(0);
+    expect(JSON.parse(json.stdout.join(""))).toEqual({
+      listen: { host: "10.0.0.9", port: 8737 },
+    });
+    expect(JSON.parse(await readFile(layout.serverConfigFile, "utf8"))).toEqual({
+      listen: { host: "10.0.0.9", port: 8737 },
+    });
+  });
+
+  it("shows the effective listen config and its source, failing fast on corrupt content", async () => {
+    const { layout } = await createFixture();
+
+    const fallback = await runCli([...serveArgs(layout, "config", "show"), "--json"]);
+    expect(fallback.exit).toBe(0);
+    expect(JSON.parse(fallback.stdout.join(""))).toEqual({
+      listen: { host: "127.0.0.1" },
+      source: "default",
+    });
+
+    await runCli(serveArgs(layout, "config", "set", "--host", "0.0.0.0", "--port", "8737"));
+    const configured = await runCli([...serveArgs(layout, "config", "show"), "--json"]);
+    expect(configured.exit).toBe(0);
+    expect(JSON.parse(configured.stdout.join(""))).toEqual({
+      listen: { host: "0.0.0.0", port: 8737 },
+      source: "config",
+    });
+
+    const text = await runCli(serveArgs(layout, "config", "show"));
+    expect(text.exit).toBe(0);
+    const lines = text.stdout.join("").trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("0.0.0.0:8737");
+    expect(lines[0]).toContain("source: config");
+
+    // show 与 set 共用 fail-fast 读取：损坏配置必须报错，不能静默降级为默认值。
+    await writeFile(layout.serverConfigFile, "{broken", "utf8");
+    const brokenShow = await runCli([...serveArgs(layout, "config", "show"), "--json"]);
+    expect(brokenShow.exit).toBe(1);
+    expect(JSON.parse(brokenShow.stdout.join(""))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Invalid server config"),
+    });
+    const brokenSet = await runCli(
+      serveArgs(layout, "config", "set", "--host", "127.0.0.1", "--port", "8737"),
+    );
+    expect(brokenSet.exit).toBe(1);
+    expect(brokenSet.stderr.join("")).toContain("Invalid server config");
+  });
+
+  it("isolates config writes to the explicit --server-root", async () => {
+    const { root } = await createFixture();
+    const first = join(root, "srv-a");
+    const second = join(root, "srv-b");
+
+    const write = await runCli([
+      "serve",
+      "config",
+      "set",
+      "--host",
+      "192.168.1.5",
+      "--port",
+      "8737",
+      "--server-root",
+      first,
+    ]);
+    expect(write.exit).toBe(0);
+    expect(JSON.parse(await readFile(join(first, "server-config.json"), "utf8"))).toEqual({
+      listen: { host: "192.168.1.5", port: 8737 },
+    });
+    // 第二个 server root 不被创建，也不读到第一个 root 的配置。
+    await expect(readFile(join(second, "server-config.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const isolated = await runCli(["serve", "config", "show", "--server-root", second, "--json"]);
+    expect(isolated.exit).toBe(0);
+    expect(JSON.parse(isolated.stdout.join(""))).toEqual({
+      listen: { host: "127.0.0.1" },
+      source: "default",
+    });
   });
 });
